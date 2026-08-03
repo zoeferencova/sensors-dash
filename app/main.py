@@ -19,8 +19,13 @@ The two flicker-sensitive pieces from Step 3 still hold:
   selected sensor changes (an explicit, infrequent user action). Every
   replay tick instead writes `extendData`, which tells the client to
   Plotly.extendTraces the new point(s) onto the existing figure in place —
-  no re-render, no teardown.
+  no re-render, no teardown. The x-axis is a sliding window that follows
+  the replay clock, moved each tick by a client-side Plotly.relayout
+  (slide_chart_x_range) so that the figure prop itself is still never
+  touched on a tick.
 """
+
+from datetime import timedelta
 
 import plotly.graph_objects as go
 from dash import ALL, Dash, Input, Output, State, ctx, dcc, html, no_update
@@ -50,12 +55,32 @@ TIMELINE = build_timeline(READINGS)
 SENSOR_IDS = [s["sensor_id"] for s in SENSORS_META]
 DEFAULT_SENSOR = SENSOR_IDS[0]
 
-# Both charts pin their x-axis to the whole replay span rather than
-# autoscaling to the points appended so far, so the trace grows into a
-# stable axis (see charts._apply_fixed_x_range). Passed as ISO strings for
-# the same reason trace data uses .tolist(): keep what reaches the client
-# plain JSON, never pandas/numpy objects.
-CHART_X_RANGE = (TIMELINE[0].isoformat(), TIMELINE[-1].isoformat())
+# How much history the charts show at once. The x-axis is a sliding window
+# ending at the current replay moment — [now - CHART_WINDOW, now] — that
+# scrolls forward as replay plays (Flood-Hub style), rather than being
+# pinned to the whole ~3-day replay span (which squeezed every event into a
+# few unreadable pixels). This is the one knob for how much history is
+# visible; nothing else needs changing to widen or narrow the view.
+CHART_WINDOW = timedelta(hours=12)
+
+
+def chart_x_range(sim_step: int) -> list[str]:
+    """The charts' x-axis range at `sim_step`: a CHART_WINDOW-wide window
+    ending at the current replay moment.
+
+    The window is always exactly CHART_WINDOW wide — the start is NOT
+    clamped to the beginning of the timeline. Clamping would make the
+    window grow during the first CHART_WINDOW of playback, which is the
+    axis-rescaling-under-the-data problem the fixed range exists to avoid;
+    an initially part-empty window that fills in left-to-right keeps the
+    time scale constant from the first tick.
+
+    Returned as ISO strings for the same reason trace data uses .tolist():
+    keep what reaches the client plain JSON, never pandas/numpy objects.
+    """
+    now = TIMELINE[max(0, min(sim_step, len(TIMELINE) - 1))]
+    return [(now - CHART_WINDOW).isoformat(), now.isoformat()]
+
 
 SPEED_OPTIONS = [
     {"label": "1x", "value": 1000},
@@ -328,6 +353,14 @@ app.layout = html.Div(
         # chart callback knows whether to extendData (same sensor, one
         # tick further) or rebuild the figure (sensor just changed).
         dcc.Store(id="chart-state-store", data={"sensor_id": None, "rendered_upto_step": -1}),
+        # [start, end] ISO strings for the charts' sliding x-axis window,
+        # written by advance_replay and consumed ONLY by the clientside
+        # relayout below — see slide_chart_x_range for why it doesn't ride
+        # along with the chart callback's extendData.
+        dcc.Store(id="chart-x-range-store", data=None),
+        # Write-only sink: a clientside callback needs an Output, and this
+        # one's whole effect is the Plotly.relayout it performs.
+        dcc.Store(id="chart-x-range-applied", data=None),
         # Append-only log entries (strings), newest kept up to MAX_LOG_ENTRIES.
         dcc.Store(id="event-log-store", data=[]),
         # Previous tick's per-sensor category (confirmed_flood/possible_fault/
@@ -356,6 +389,7 @@ def set_speed(interval_ms):
     Output("sim-step-store", "data"),
     Output("active-events-store", "data"),
     Output("clock-display", "children"),
+    Output("chart-x-range-store", "data"),
     Output("replay-interval", "disabled"),
     Output("play-pause-btn", "children"),
     Input("replay-interval", "n_intervals"),
@@ -377,13 +411,19 @@ def advance_replay(
     n_intervals (clamped to the last timestep) and is recomputed the same
     way regardless of which Input fired, since Trigger needs "now" as the
     new event's trigger_step.
+
+    Also emits the charts' sliding x-axis window, for one specific reason:
+    the window has to reach the client in a DIFFERENT response than the
+    charts' extendData, and this callback is the one that runs strictly
+    before update_charts (which is triggered by the sim-step-store this
+    writes). See slide_chart_x_range.
     """
     sim_step = min(n_intervals, len(TIMELINE) - 1)
     triggered = ctx.triggered_id
 
     if triggered == "play-pause-btn":
         now_disabled = not is_disabled
-        return no_update, no_update, no_update, now_disabled, ("Play" if now_disabled else "Pause")
+        return no_update, no_update, no_update, no_update, now_disabled, ("Play" if now_disabled else "Pause")
 
     if triggered == "injector-reset-btn":
         # active_events_raw is already the raw (dict) list — no need to
@@ -391,13 +431,13 @@ def advance_replay(
         # (and the callbacks it would re-trigger) when there was nothing to
         # clear.
         events_output = no_update if not active_events_raw else []
-        return no_update, events_output, no_update, no_update, no_update
+        return no_update, events_output, no_update, no_update, no_update, no_update
 
     active_events = events_from_store(active_events_raw)
 
     if triggered == "injector-trigger-btn":
         new_event = build_event(scenario, target_sensor, DEFAULT_MAGNITUDE[scenario], sim_step)
-        return no_update, events_to_store(active_events + [new_event]), no_update, no_update, no_update
+        return no_update, events_to_store(active_events + [new_event]), no_update, no_update, no_update, no_update
 
     # Default path: a replay-interval tick (or the initial page-load call).
     # Never fires while paused, since a disabled dcc.Interval simply doesn't
@@ -432,7 +472,56 @@ def advance_replay(
     disabled_output = True if at_end else no_update
     button_output = "Play" if at_end else no_update
 
-    return sim_step, events_output, display, disabled_output, button_output
+    return sim_step, events_output, display, chart_x_range(sim_step), disabled_output, button_output
+
+
+# The sliding window is applied with a direct Plotly.relayout on the graph
+# div, deliberately NOT by sending a new (or Patched) `figure` prop.
+#
+# dcc.Graph queues an extendData append in component state, and its
+# UNSAFE_componentWillReceiveProps starts that queue from EMPTY_DATA
+# whenever `figure` changed too — then guards the setState with an identity
+# check against that same EMPTY_DATA constant. So if `figure` and
+# `extendData` for one graph arrive in the SAME response, the append is
+# dropped without any error: the chart just quietly stops updating. (It
+# also pushes the dropped entry into the shared EMPTY_DATA array, so the
+# damage can resurface on a later, unrelated append.) That holds for a
+# Patch too — a Patch still changes the figure prop's identity.
+#
+# Hence the split: extendData rides update_charts, the range rides
+# advance_replay, and they land in two separate responses. The order is
+# guaranteed rather than lucky — update_charts is triggered BY the
+# sim-step-store advance_replay writes, so the relayout has always finished
+# by the time that tick's extendData arrives. (dcc syncs gd.layout back
+# into the figure prop after any relayout; keeping that sync in its own
+# response is exactly what stops it colliding with an append.)
+app.clientside_callback(
+    """
+    function slide_chart_x_range(xRange) {
+        if (!xRange) { return window.dash_clientside.no_update; }
+        ["water-level-graph", "rainfall-graph"].forEach(function (graphId) {
+            var container = document.getElementById(graphId);
+            var gd = container && container.querySelector(".js-plotly-plot");
+            // _fullLayout is Plotly's "this div has been plotted" marker —
+            // the async graph bundle may still be loading on first paint.
+            if (!gd || !gd._fullLayout) { return; }
+            var applied = xRange[0] + "|" + xRange[1];
+            // Plotly rewrites date ranges into its own string format, so
+            // gd.layout can't be compared against what we sent; track the
+            // last applied window on the element instead. Skips a no-op
+            // relayout (and the figure-prop sync it would trigger) while
+            // replay is paused.
+            if (gd.__lastXRange === applied) { return; }
+            gd.__lastXRange = applied;
+            window.Plotly.relayout(gd, {"xaxis.range": [xRange[0], xRange[1]]});
+        });
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output("chart-x-range-applied", "data"),
+    Input("chart-x-range-store", "data"),
+    prevent_initial_call=True,
+)
 
 
 @app.callback(
@@ -490,6 +579,22 @@ def update_injector_scenario_controls(scenario):
     return description, target_row_style
 
 
+def _stored_events_signature(active_events: list) -> list:
+    """events_signature's fingerprint, in the shape it comes back as after
+    a round-trip through chart-state-store.
+
+    The store serializes to JSON, which turns the nested tuples into nested
+    LISTS — so comparing the value read back out against a freshly computed
+    tuple never matches, not even when both describe the same set (`() !=
+    []` for the common case of no active events at all). That made
+    `events_changed` permanently True, which silently routed EVERY tick
+    down the full-figure rebuild branch and left the extendData path dead
+    code. Normalizing to the JSON shape on this side of the store boundary
+    is what makes the comparison mean what it reads as.
+    """
+    return [list(item) for item in events_signature(active_events)]
+
+
 @app.callback(
     Output("water-level-graph", "figure"),
     Output("water-level-graph", "extendData"),
@@ -515,6 +620,15 @@ def update_charts(sim_step, selected_sensor, active_events_raw, chart_state):
     visible point's value changes retroactively the instant an event is
     triggered (or reverts the instant one expires/is reset). A signature
     over the active set (not just its length) catches both directions.
+
+    This callback must NEVER write `figure` and `extendData` for the same
+    graph in the same response — not even a Patch. dcc.Graph drops the
+    append when both arrive together (see slide_chart_x_range for the
+    mechanism), so a tick that also touched the figure would silently stop
+    the chart updating. The two branches below are mutually exclusive for
+    exactly that reason, and the sliding x-axis window is deliberately
+    routed around this callback entirely: it rides on chart-x-range-store
+    instead.
     """
     active_events = events_from_store(active_events_raw)
     visible = visible_readings(READINGS, TIMELINE, sim_step)
@@ -522,7 +636,7 @@ def update_charts(sim_step, selected_sensor, active_events_raw, chart_state):
     water_level_series = get_series(injected, selected_sensor, "water_level")
     rainfall_series = get_series(injected, selected_sensor, "rainfall_intensity")
 
-    current_signature = events_signature(active_events)
+    current_signature = _stored_events_signature(active_events)
     sensor_changed = chart_state.get("sensor_id") != selected_sensor
     events_changed = chart_state.get("events_signature") != current_signature
     new_state = {
@@ -532,9 +646,15 @@ def update_charts(sim_step, selected_sensor, active_events_raw, chart_state):
     }
 
     if sensor_changed or events_changed:
-        water_level_fig = charts.build_water_level_figure(selected_sensor, CHART_X_RANGE)
+        # The rebuilt figure carries the CURRENT window, not the timeline's
+        # start — otherwise switching sensors mid-replay would snap both
+        # charts back to the beginning until the next tick nudged them
+        # forward. This is the only place the range travels with a figure;
+        # every tick moves it via relayout instead.
+        x_range = chart_x_range(sim_step)
+        water_level_fig = charts.build_water_level_figure(selected_sensor, x_range)
         charts.update_water_level_figure(water_level_fig, water_level_series)
-        rainfall_fig = charts.build_rainfall_figure(selected_sensor, CHART_X_RANGE)
+        rainfall_fig = charts.build_rainfall_figure(selected_sensor, x_range)
         charts.update_rainfall_figure(rainfall_fig, rainfall_series)
         return water_level_fig, no_update, rainfall_fig, no_update, new_state
 
