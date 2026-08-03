@@ -70,21 +70,41 @@ app = Dash(__name__)
 
 top_bar = html.Div(
     id="top-bar",
-    style={
-        "display": "flex",
-        "alignItems": "center",
-        "gap": "24px",
-        "padding": "8px 16px",
-        "borderBottom": "1px solid #ccc",
-        "flexWrap": "wrap",
-    },
+    className="top-bar",
     children=[
-        html.Div(id="overall-risk-display"),
-        html.Div(id="clock-display"),
-        html.Button("Play", id="play-pause-btn", n_clicks=0),
-        dcc.RadioItems(id="speed-control", options=SPEED_OPTIONS, value=1000, inline=True),
-        # Room for injector-related global bits (e.g. "N active events") once the injector exists.
-        html.Div(id="top-bar-injector-slot"),
+        # LEFT — title
+        html.H1("Botič Flood Monitoring", className="dashboard-title"),
+
+        # CENTER — clock + playback controls
+        html.Div(
+            className="top-bar-center",
+            children=[
+                html.Div(id="clock-display"),
+                html.Div(
+                    className="playback-controls",
+                    children=[
+                        html.Button("Pause", id="play-pause-btn", className="btn btn-primary", n_clicks=0),
+                        dcc.RadioItems(
+                            id="speed-control",
+                            options=SPEED_OPTIONS,
+                            value=1000,
+                            inline=True,
+                            className="speed-segmented",
+                        ),
+                    ],
+                ),
+            ],
+        ),
+
+        # RIGHT — risk status
+        html.Div(
+            className="top-bar-right",
+            children=[
+                html.Div(id="overall-risk-display"),
+                # injector slot kept here for the "N active events" global bit
+                html.Div(id="top-bar-injector-slot"),
+            ],
+        ),
     ],
 )
 
@@ -94,6 +114,7 @@ left_panel_top = html.Div(
     id="left-panel-top",
     style={"flex": "1 1 auto", "overflowY": "auto", "padding": "8px"},
     children=[
+        html.Label("Sensor", className="field-label"),
         dcc.Dropdown(
             id="sensor-selector",
             options=[{"label": f"{s['sensor_id']} — {s['name']}", "value": s["sensor_id"]} for s in SENSORS_META],
@@ -150,8 +171,6 @@ DEFAULT_TARGET_SENSOR = UPSTREAM_SENSOR_ID if UPSTREAM_SENSOR_ID in SENSOR_IDS e
 injector_panel = html.Div(
     id="injector-placeholder",
     style={
-        "border": "2px dashed #b35900",
-        "background": "#fff3e6",
         "padding": "8px",
         "margin": "8px",
     },
@@ -159,7 +178,7 @@ injector_panel = html.Div(
         html.Div(
             style={"display": "flex", "alignItems": "center", "gap": "6px"},
             children=[
-                html.H4("Event injector", style={"margin": 0}),
+                html.H4("Event injector"),
                 # title= renders as the browser's native tooltip on hover —
                 # no dbc dependency and no callback needed for what is
                 # purely explanatory text.
@@ -174,18 +193,18 @@ injector_panel = html.Div(
                 ),
             ],
         ),
-        html.Label("Scenario"),
+        html.Label("Scenario", className="field-label"),
         dcc.Dropdown(
             id="injector-scenario-select",
             options=[{"label": s, "value": s} for s in SCENARIOS],
             value=SCENARIOS[0],
             clearable=False,
         ),
-        html.Div(id="injector-scenario-description", style={"fontSize": "0.8em", "margin": "6px 0"}),
+        html.Div(id="injector-scenario-description"),
         html.Div(
             id="injector-target-sensor-row",
             children=[
-                html.Label("Target sensor"),
+                html.Label("Target sensor", className="field-label"),
                 dcc.Dropdown(
                     id="injector-target-sensor-select",
                     options=[{"label": sid, "value": sid} for sid in SENSOR_IDS],
@@ -197,8 +216,8 @@ injector_panel = html.Div(
         html.Div(
             style={"display": "flex", "gap": "8px", "marginTop": "8px"},
             children=[
-                html.Button("Trigger scenario", id="injector-trigger-btn", n_clicks=0),
-                html.Button("Reset injected events", id="injector-reset-btn", n_clicks=0),
+                html.Button("Trigger event", id="injector-trigger-btn", className="btn btn-primary", n_clicks=0),
+                html.Button("Reset", id="injector-reset-btn", className="btn btn-secondary", n_clicks=0),
             ],
         ),
         html.Div(id="injector-active-events-display", style={"marginTop": "8px"}),
@@ -243,7 +262,7 @@ status_legend = html.Div(
         # with no confirming upstream rain, so it is NOT escalated.
         _legend_row(
             SEVERITY_COLORS["Watch"],
-            "possible fault — high water, unconfirmed (does not escalate)",
+            "Possible fault",
             dashed_ring=True,
         ),
     ],
@@ -317,7 +336,7 @@ app.layout = html.Div(
         dcc.Store(id="sensor-status-store", data={}),
         # disabled=True: replay opens paused at the first timestep, per
         # CLAUDE.md — history builds up as it plays, not fully populated.
-        dcc.Interval(id="replay-interval", interval=1000, n_intervals=0, disabled=True),
+        dcc.Interval(id="replay-interval", interval=1000, n_intervals=0, disabled=False),
     ],
 )
 
@@ -388,10 +407,11 @@ def advance_replay(
 
     current_time = TIMELINE[sim_step]
     display = html.Div(
-        [
-            html.Span(f"sim_step: {sim_step} / {len(TIMELINE) - 1}"),
-            html.Span(f"  |  timestamp: {current_time}"),
-        ]
+        className="clock-block",
+        children=[
+            html.Span(current_time.strftime("%b %d, %Y · %H:%M"), className="clock-time"),
+            html.Span(f"{sim_step} / {len(TIMELINE) - 1}", className="clock-step"),
+        ],
     )
 
     # Only write active-events-store when an event actually expired this
@@ -586,15 +606,16 @@ def _latest_soil_moisture(df, sensor_id):
 
 def _render_overall_risk(overall_state: str) -> html.Span:
     color = SEVERITY_COLORS[overall_state]
-    text_color = "#fff" if overall_state in ("Alert", "Danger", "Extreme") else "#000"
+    text_color = "#fff"
     return html.Span(
         f"Overall risk: {overall_state}",
         style={
             "backgroundColor": color,
             "color": text_color,
-            "padding": "4px 10px",
-            "borderRadius": "4px",
-            "fontWeight": "bold",
+            "padding": "6px 12px",
+            "borderRadius": "6px",
+            "fontWeight": 500,
+            "fontSize": "0.95em"
         },
     )
 
@@ -716,14 +737,14 @@ def _render_active_events(active_events: list, sim_step: int) -> html.Div:
     Streamlit render_sidebar_status, minus session_state: steps-remaining
     counts down as sim_step advances since this re-renders every tick."""
     if not active_events:
-        return html.Div("None — clean replay.", style={"fontSize": "0.85em"})
+        return html.Div("Status: no simulated events active", className="injector-status")
     rows = []
     for event in active_events:
         remaining = max(event.duration - (sim_step - event.trigger_step), 0)
         label = event.scenario
         if event.target_sensor:
             label += f" @ {event.target_sensor}"
-        rows.append(html.Div(f"{label} — magnitude {event.magnitude:g}, {remaining} steps left", style={"fontSize": "0.85em"}))
+        rows.append(html.Div(f"{label} — magnitude {event.magnitude:g}, {remaining} steps left", className="injector-status"))
     return html.Div(rows)
 
 

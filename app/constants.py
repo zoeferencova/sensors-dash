@@ -16,11 +16,11 @@ THRESHOLDS = {
 STAGES = ["Normal", "Watch", "Alert", "Danger", "Extreme"]
 
 SEVERITY_COLORS = {
-    "Normal": "#2ca02c",   # green
-    "Watch": "#e6b800",    # amber
-    "Alert": "#ff7f0e",    # orange
-    "Danger": "#d62728",   # red
-    "Extreme": "#7f0000",  # dark red
+    "Normal":  "#7A9B76",   # muted sage green — calm, natural
+    "Watch":   "#C9B458",   # muted ochre/gold — mild caution
+    "Alert":   "#C68A4E",   # muted terracotta/amber — clear step up
+    "Danger":  "#B4553F",   # muted brick red — alarming but not neon
+    "Extreme": "#7D3A32",   # deep muted maroon — gravest
 }
 
 # Pin color before assess_risk has produced a per-sensor state.

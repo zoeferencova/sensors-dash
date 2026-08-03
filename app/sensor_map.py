@@ -10,12 +10,13 @@ else about the map is ever touched).
 
 import dash_leaflet as dl
 
+from botic_reach_coords import BOTIC_REACH
 from constants import NEUTRAL_PIN_COLOR, SEVERITY_COLORS
 
 MARKER_LAYER_ID = "sensor-markers"
 MARKER_ID_TYPE = "sensor-marker"  # pattern-matching id type for click selection
 
-FAULT_STROKE_COLOR = "#000000"
+FAULT_STROKE_COLOR = "#4d4d4d"
 """possible_fault gets a black, thicker, dashed ring around whatever color
 its raw (unconfirmed) severity would otherwise be — same fill so you can
 still see how high it's reading, but the ring marks it as unconfirmed
@@ -36,7 +37,7 @@ def _marker_style(sensor_assessment) -> dict:
 
     if sensor_assessment.possible_fault:
         fill = SEVERITY_COLORS.get(sensor_assessment.threshold_state, NEUTRAL_PIN_COLOR)
-        return {"color": FAULT_STROKE_COLOR, "fillColor": fill, "weight": 3, "dashArray": "4"}
+        return {"color": FAULT_STROKE_COLOR, "fillColor": fill, "weight": 2, "dashArray": "4"}
 
     fill = SEVERITY_COLORS.get(sensor_assessment.effective_state, NEUTRAL_PIN_COLOR)
     return {"color": fill, "fillColor": fill, "weight": 2, "dashArray": None}
@@ -96,7 +97,16 @@ def build_map(sensors_meta: list[dict]) -> dl.Map:
         bounds=bounds,
         style={"height": "100%", "width": "100%"},
         children=[
-            dl.TileLayer(),
+            dl.TileLayer(
+                url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
+                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+            ),
+            dl.Polyline(
+                positions=BOTIC_REACH,
+                color="#4A7A96",     # muted blue to fit your palette
+                weight=4,
+                opacity=0.6,
+            ),
             dl.LayerGroup(id=MARKER_LAYER_ID, children=build_markers(sensors_meta)),
         ],
     )
