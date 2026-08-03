@@ -16,6 +16,110 @@ import plotly.graph_objects as go
 from constants import SEVERITY_COLORS, THRESHOLDS
 
 INJECTED_MARKER_COLOR = "#e07b00"
+WATER_LEVEL_COLOR = "#1f4e79"
+RAINFALL_COLOR = "#4c72b0"
+
+# --- Visual language ------------------------------------------------------
+# Modelled on Google Flood Hub's discharge panel (the layout reference in
+# CLAUDE.md): quiet chrome, data forward. No axis lines or box, no tick
+# marks, horizontal+vertical gridlines in a very light grey, units carried
+# by a small top-left title instead of rotated axis titles, and the
+# threshold values moved off the plot into the legend.
+#
+# The font stack mirrors assets/style.css. Inter is already loaded there
+# for the HTML, but Plotly draws its labels as SVG text with its own font
+# settings, so the charts opt in separately or they fall back to Plotly's
+# default sans-serif and look foreign next to the rest of the dashboard.
+FONT_FAMILY = "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+TITLE_COLOR = "#2c3e50"   # same ink as .clock-time
+AXIS_COLOR = "#6b7681"    # same muted grey as .btn-secondary text
+GRID_COLOR = "#e9ecef"    # same light grey as the .speed-segmented track
+
+
+def _base_layout(title: str) -> dict:
+    """Layout chrome shared by both charts, so they read as one system.
+
+    Built once per figure and never touched again — a tick only appends
+    trace data (extendData) and slides the x-axis range, so none of this
+    is re-sent or recomputed during playback.
+    """
+    return dict(
+        title=dict(
+            text=title,
+            # Flush top-left of the whole graph, like the reference's
+            # "Discharge in m³/s" — small and quiet, not a headline.
+            # xref="container" (not "paper") puts it left of the y tick
+            # labels rather than above the plot area.
+            x=0,
+            xref="container",
+            xanchor="left",
+            pad=dict(l=6),
+            font=dict(size=13, color=TITLE_COLOR),
+        ),
+        font=dict(family=FONT_FAMILY, size=11, color=AXIS_COLOR),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        # Left/bottom stay small because automargin grows them to fit the
+        # tick labels; the top leaves room for the title.
+        margin=dict(l=8, r=12, t=44, b=8),
+        legend=dict(
+            orientation="h",
+            x=0,
+            xanchor="left",
+            y=-0.16,
+            yanchor="top",
+            font=dict(size=11, color=AXIS_COLOR),
+            # The legend here is a key, not a control: clicking an entry
+            # would hide a threshold line or the injected-event markers,
+            # which is never something the user wants mid-replay.
+            itemclick=False,
+            itemdoubleclick=False,
+            bgcolor="rgba(0,0,0,0)",
+        ),
+        hoverlabel=dict(font=dict(family=FONT_FAMILY, size=11)),
+        template=None,
+    )
+
+
+def _apply_axis_style(fig: go.Figure) -> None:
+    """Strip the axis chrome down to gridlines and labels."""
+    axis_style = dict(
+        title_text=None,
+        showgrid=True,
+        gridcolor=GRID_COLOR,
+        gridwidth=1,
+        showline=False,
+        zeroline=False,
+        ticks="",
+        automargin=True,
+        tickfont=dict(size=11, color=AXIS_COLOR),
+    )
+    fig.update_xaxes(**axis_style)
+    fig.update_yaxes(**axis_style)
+
+
+def _threshold_legend_trace(stage: str, level: int) -> go.Scatter:
+    """A legend-only proxy for a threshold line.
+
+    The threshold itself is an hline, which is a layout *shape* and so can
+    never appear in the legend. The reference puts the stage name over its
+    numeric value beneath the chart, which is what the `<br>` gives; doing
+    it this way also lets the lines themselves stay unlabelled, freeing the
+    ~80px right margin the old inline annotations needed.
+
+    Carries no data (`[None]`), so it draws nothing and cannot affect
+    autorange. It sits at trace index 2+ — main line and injected markers
+    keep indices 0 and 1, which is what main.update_charts extends.
+    """
+    return go.Scatter(
+        x=[None],
+        y=[None],
+        mode="markers",
+        marker=dict(color=SEVERITY_COLORS[stage], size=7),
+        name=f"{stage}<br>{level}",
+        showlegend=True,
+        hoverinfo="skip",
+    )
 
 
 def _injected_marker_trace() -> go.Scatter:
@@ -83,26 +187,27 @@ def build_water_level_figure(sensor_id: str, x_range=None) -> go.Figure:
     response can otherwise arrive after a newer/faster one and clobber it.
     """
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=[], y=[], mode="lines", name="water_level", line=dict(color="#1f4e79"), showlegend=False))
+    fig.add_trace(
+        go.Scatter(
+            x=[],
+            y=[],
+            mode="lines",
+            name="water_level",
+            line=dict(color=WATER_LEVEL_COLOR, width=2),
+            showlegend=False,
+        )
+    )
     fig.add_trace(_injected_marker_trace())
 
+    # Solid, unlabelled threshold lines (the reference draws them this way);
+    # each one's name and value are carried by its legend proxy below.
     for stage, level in THRESHOLDS.items():
-        fig.add_hline(
-            y=level,
-            line=dict(color=SEVERITY_COLORS[stage], dash="dash", width=1.5),
-            annotation_text=f"{stage} ({level} cm)",
-            annotation_position="right",
-            annotation_font_color=SEVERITY_COLORS[stage],
-        )
+        fig.add_hline(y=level, line=dict(color=SEVERITY_COLORS[stage], width=1.5))
+    for stage, level in THRESHOLDS.items():
+        fig.add_trace(_threshold_legend_trace(stage, level))
 
-    fig.update_layout(
-        title=f"{sensor_id} — water_level (cm)",
-        xaxis_title="time",
-        yaxis_title="water_level (cm)",
-        margin=dict(t=40, r=80),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02),
-        template=None,
-    )
+    fig.update_layout(**_base_layout(f"{sensor_id} — Water level in cm"))
+    _apply_axis_style(fig)
     _apply_fixed_x_range(fig, x_range)
     return fig
 
@@ -130,17 +235,13 @@ def update_water_level_figure(fig: go.Figure, series: pd.DataFrame) -> None:
 def build_rainfall_figure(sensor_id: str, x_range=None) -> go.Figure:
     """See build_water_level_figure for the `x_range` / template rationale."""
     fig = go.Figure()
-    fig.add_trace(go.Bar(x=[], y=[], name="rainfall_intensity", marker_color="#4c72b0", showlegend=False))
+    fig.add_trace(
+        go.Bar(x=[], y=[], name="rainfall_intensity", marker_color=RAINFALL_COLOR, showlegend=False)
+    )
     fig.add_trace(_injected_marker_trace())
 
-    fig.update_layout(
-        title=f"{sensor_id} — rainfall_intensity (mm/h)",
-        xaxis_title="time",
-        yaxis_title="mm/h",
-        margin=dict(t=40),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02),
-        template=None,
-    )
+    fig.update_layout(**_base_layout(f"{sensor_id} — Rainfall in mm/h"))
+    _apply_axis_style(fig)
     _apply_fixed_x_range(fig, x_range)
     return fig
 
