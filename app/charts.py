@@ -33,15 +33,39 @@ def _injected_marker_trace() -> go.Scatter:
     )
 
 
+def _apply_fixed_x_range(fig: go.Figure, x_range) -> None:
+    """Pin the x-axis to the whole replay timeline instead of letting it
+    autoscale to whatever has been appended so far.
+
+    Without this the axis rescales on every tick — the first few points span
+    the full width, then compress as history accumulates, so the spacing
+    between points keeps changing. Pinning it to [first, last] timestep
+    (Flood-Hub style) means the trace grows left-to-right into a stable
+    axis with constant spacing.
+
+    This is layout-only, so it does NOT interfere with extendData: appends
+    still mutate trace data in place, and because autorange is off, Plotly
+    won't recompute the axis when they land.
+    """
+    if x_range is None:
+        return
+    start, end = x_range
+    fig.update_xaxes(range=[start, end], autorange=False)
+
+
 def injected_points(series: pd.DataFrame) -> pd.DataFrame:
     if "injected" not in series.columns or not series["injected"].any():
         return series.iloc[0:0]
     return series[series["injected"]]
 
 
-def build_water_level_figure(sensor_id: str) -> go.Figure:
+def build_water_level_figure(sensor_id: str, x_range=None) -> go.Figure:
     """Structure only — no data yet. Call update_water_level_figure right
     after to populate it, and on every tick thereafter.
+
+    `x_range` pins the time axis to the full replay timeline (see
+    _apply_fixed_x_range) so the line grows into a stable axis instead of
+    the axis rescaling under it as points append.
 
     template=None (below) drops plotly.py's embedded default theme from the
     serialized figure — several KB of colorscale/font/background JSON that
@@ -73,6 +97,7 @@ def build_water_level_figure(sensor_id: str) -> go.Figure:
         legend=dict(orientation="h", yanchor="bottom", y=1.02),
         template=None,
     )
+    _apply_fixed_x_range(fig, x_range)
     return fig
 
 
@@ -96,7 +121,8 @@ def update_water_level_figure(fig: go.Figure, series: pd.DataFrame) -> None:
     fig.data[1].y = points["value"].tolist()
 
 
-def build_rainfall_figure(sensor_id: str) -> go.Figure:
+def build_rainfall_figure(sensor_id: str, x_range=None) -> go.Figure:
+    """See build_water_level_figure for the `x_range` / template rationale."""
     fig = go.Figure()
     fig.add_trace(go.Bar(x=[], y=[], name="rainfall_intensity", marker_color="#4c72b0", showlegend=False))
     fig.add_trace(_injected_marker_trace())
@@ -109,6 +135,7 @@ def build_rainfall_figure(sensor_id: str) -> go.Figure:
         legend=dict(orientation="h", yanchor="bottom", y=1.02),
         template=None,
     )
+    _apply_fixed_x_range(fig, x_range)
     return fig
 
 

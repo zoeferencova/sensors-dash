@@ -26,7 +26,7 @@ import plotly.graph_objects as go
 from dash import ALL, Dash, Input, Output, State, ctx, dcc, html, no_update
 
 import charts
-from constants import SEVERITY_COLORS
+from constants import SEVERITY_COLORS, STAGES
 from data_loader import clean_readings, get_series, latest_value, load_long, load_sensors
 from event_injector import (
     DEFAULT_MAGNITUDE,
@@ -42,13 +42,20 @@ from event_injector import (
 )
 from replay import build_timeline, visible_readings
 from risk_assessment import RAINFALL_CONFIRM_MM_H, assess_risk
-from sensor_map import MARKER_ID_TYPE, MARKER_LAYER_ID, build_map, build_markers
+from sensor_map import FAULT_STROKE_COLOR, MARKER_ID_TYPE, MARKER_LAYER_ID, build_map, build_markers
 
 READINGS = clean_readings(load_long())
 SENSORS_META = load_sensors()
 TIMELINE = build_timeline(READINGS)
 SENSOR_IDS = [s["sensor_id"] for s in SENSORS_META]
 DEFAULT_SENSOR = SENSOR_IDS[0]
+
+# Both charts pin their x-axis to the whole replay span rather than
+# autoscaling to the points appended so far, so the trace grows into a
+# stable axis (see charts._apply_fixed_x_range). Passed as ISO strings for
+# the same reason trace data uses .tolist(): keep what reaches the client
+# plain JSON, never pandas/numpy objects.
+CHART_X_RANGE = (TIMELINE[0].isoformat(), TIMELINE[-1].isoformat())
 
 SPEED_OPTIONS = [
     {"label": "1x", "value": 1000},
@@ -100,16 +107,22 @@ left_panel_top = html.Div(
         dcc.Graph(id="water-level-graph", figure=go.Figure()),
         dcc.Graph(id="rainfall-graph", figure=go.Figure()),
         html.Div(id="current-readings-panel"),
-        html.Div(id="rule-eval-panel"),
-    ],
-)
-
-left_panel_bottom = html.Div(
-    id="left-panel-bottom",
-    style={"borderTop": "2px solid #999", "padding": "8px", "flex": "0 0 auto"},
-    children=[
-        html.H4("All-sensor status"),
-        html.Div(id="all-sensor-status-panel"),
+        # <details>/<summary> gives a native collapsible with no callback and
+        # no extra dependency. The Details/Summary wrapper lives HERE in the
+        # static layout rather than inside _render_rule_eval's output: the
+        # rule-eval content is re-rendered every tick, so if the <details>
+        # element itself were rebuilt each time, the browser would drop its
+        # open/closed state and the panel would snap shut once per tick.
+        # Only the inner Div's children change, so the disclosure state is
+        # the user's to keep.
+        html.Details(
+            id="rule-eval-accordion",
+            style={"marginTop": "8px"},
+            children=[
+                html.Summary("Rule evaluation", style={"cursor": "pointer", "fontWeight": "bold"}),
+                html.Div(id="rule-eval-panel"),
+            ],
+        ),
     ],
 )
 
@@ -123,7 +136,7 @@ left_panel = html.Div(
         "borderRight": "1px solid #ccc",
         "minHeight": 0,
     },
-    children=[left_panel_top, left_panel_bottom],
+    children=[left_panel_top],
 )
 
 # --- Center: map ----------------------------------------------------------
@@ -143,12 +156,23 @@ injector_panel = html.Div(
         "margin": "8px",
     },
     children=[
-        html.H4("Event injector"),
         html.Div(
-            "Overlays synthetic readings onto the stream assess_risk sees. It "
-            "never sets the risk state directly, and never touches the "
-            "underlying dataset — Reset always returns to a clean replay.",
-            style={"fontSize": "0.8em", "marginBottom": "8px"},
+            style={"display": "flex", "alignItems": "center", "gap": "6px"},
+            children=[
+                html.H4("Event injector", style={"margin": 0}),
+                # title= renders as the browser's native tooltip on hover —
+                # no dbc dependency and no callback needed for what is
+                # purely explanatory text.
+                html.Span(
+                    "ⓘ",
+                    title=(
+                        "Overlays synthetic readings onto the stream assess_risk sees. "
+                        "It never sets the risk state directly, and never touches the "
+                        "underlying dataset — Reset always returns to a clean replay."
+                    ),
+                    style={"cursor": "help", "color": "#b35900"},
+                ),
+            ],
         ),
         html.Label("Scenario"),
         dcc.Dropdown(
@@ -181,9 +205,63 @@ injector_panel = html.Div(
     ],
 )
 
+def _legend_swatch(fill: str, dashed_ring: bool = False) -> html.Span:
+    """A small circle matching how the map draws its pins: filled by
+    severity, and for possible_fault the same dashed black ring
+    sensor_map._marker_style applies."""
+    style = {
+        "display": "inline-block",
+        "width": "10px",
+        "height": "10px",
+        "borderRadius": "50%",
+        "backgroundColor": fill,
+        "marginRight": "6px",
+        "flex": "0 0 auto",
+        "border": f"2px {'dashed' if dashed_ring else 'solid'} {FAULT_STROKE_COLOR if dashed_ring else fill}",
+        "boxSizing": "content-box",
+    }
+    return html.Span(style=style)
+
+
+def _legend_row(fill: str, label: str, dashed_ring: bool = False) -> html.Div:
+    return html.Div(
+        style={"display": "flex", "alignItems": "center", "marginBottom": "2px"},
+        children=[_legend_swatch(fill, dashed_ring), html.Span(label)],
+    )
+
+
+status_legend = html.Div(
+    id="status-legend",
+    style={"fontSize": "0.75em", "color": "#444", "marginTop": "8px"},
+    children=[
+        html.Div("Legend", style={"fontWeight": "bold", "marginBottom": "3px"}),
+        # Severity rows come from constants.STAGES/SEVERITY_COLORS rather than
+        # a hardcoded list, so the legend can't drift from the palette the
+        # map and panels actually use.
+        *[_legend_row(SEVERITY_COLORS[stage], stage) for stage in STAGES],
+        # The one that isn't self-explanatory: a dashed ring means high water
+        # with no confirming upstream rain, so it is NOT escalated.
+        _legend_row(
+            SEVERITY_COLORS["Watch"],
+            "possible fault — high water, unconfirmed (does not escalate)",
+            dashed_ring=True,
+        ),
+    ],
+)
+
+all_sensor_status_panel = html.Div(
+    id="all-sensor-status-section",
+    style={"padding": "8px", "margin": "8px", "borderTop": "2px solid #999"},
+    children=[
+        html.H4("All-sensor status"),
+        html.Div(id="all-sensor-status-panel"),
+        status_legend,
+    ],
+)
+
 event_log_placeholder = html.Div(
     id="event-log-placeholder",
-    style={"padding": "8px", "margin": "8px"},
+    style={"padding": "8px", "margin": "8px", "borderTop": "2px solid #999"},
     children=[
         html.H4("Event log"),
         html.Div(id="event-log-content"),
@@ -192,8 +270,15 @@ event_log_placeholder = html.Div(
 
 right_panel = html.Div(
     id="right-panel",
-    style={"width": "300px", "flex": "0 0 300px", "display": "flex", "flexDirection": "column", "minHeight": 0},
-    children=[injector_panel, event_log_placeholder],
+    style={
+        "width": "300px",
+        "flex": "0 0 300px",
+        "display": "flex",
+        "flexDirection": "column",
+        "minHeight": 0,
+        "overflowY": "auto",
+    },
+    children=[injector_panel, all_sensor_status_panel, event_log_placeholder],
 )
 
 # --- Assemble ----------------------------------------------------------
@@ -427,9 +512,9 @@ def update_charts(sim_step, selected_sensor, active_events_raw, chart_state):
     }
 
     if sensor_changed or events_changed:
-        water_level_fig = charts.build_water_level_figure(selected_sensor)
+        water_level_fig = charts.build_water_level_figure(selected_sensor, CHART_X_RANGE)
         charts.update_water_level_figure(water_level_fig, water_level_series)
-        rainfall_fig = charts.build_rainfall_figure(selected_sensor)
+        rainfall_fig = charts.build_rainfall_figure(selected_sensor, CHART_X_RANGE)
         charts.update_rainfall_figure(rainfall_fig, rainfall_series)
         return water_level_fig, no_update, rainfall_fig, no_update, new_state
 
@@ -545,8 +630,10 @@ def _render_current_readings(sensor_assessment, rainfall_latest, soil_latest, so
 
 
 def _render_rule_eval(sensor_assessment) -> html.Div:
+    """Body only — the "Rule evaluation" heading is the accordion's
+    <summary> in the static layout, so it must not be repeated here."""
     if sensor_assessment is None:
-        return html.Div([html.H4("Rule evaluation"), html.Div("No data yet.")])
+        return html.Div("No data yet.")
 
     conditions = sensor_assessment.conditions
 
@@ -555,7 +642,6 @@ def _render_rule_eval(sensor_assessment) -> html.Div:
 
     return html.Div(
         [
-            html.H4("Rule evaluation"),
             html.Div(f"water_level ≥ Watch: {mark(conditions['water_level_watch_plus'])}"),
             html.Div(f"rising_fast: {mark(conditions['rising_fast'])}"),
             html.Div(f"upstream_rain_confirmed: {mark(conditions['upstream_rain_confirmed'])}"),
