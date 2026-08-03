@@ -1,14 +1,20 @@
-"""Dash entry point — Step 3 of the Streamlit->Dash port (CLAUDE.md
-"Dashboard sections (target layout)"). Adds the map, the sensor charts, and
-the structural layout (top bar / left panel / center map / right panel).
-Styling is intentionally bare — borders/backgrounds only where CLAUDE.md
-calls for visual separation (left panel split, injector placeholder).
+"""Dash entry point — Steps 3-4 of the Streamlit->Dash port.
 
-The two flicker-sensitive pieces follow CLAUDE.md's tech-stack notes
-exactly:
+Step 3 (CLAUDE.md "Dashboard sections (target layout)") built the map, the
+sensor charts, and the structural layout. Step 4 (CLAUDE.md "The alert /
+nowcasting logic") wires the already-ported `risk_assessment.assess_risk`
+into that layout: one callback (`update_risk_fanout`) runs it once per tick
+and fans the single result out to the map pins, the top-bar overall state,
+the current-readings and rule-evaluation panels, the all-sensor summary,
+and the event log. Nothing downstream recomputes risk itself — they only
+read fields off the `RiskAssessment`/`SensorAssessment` that callback
+produces.
+
+The two flicker-sensitive pieces from Step 3 still hold:
 - The map: dl.Map/dl.TileLayer are built once in sensor_map.build_map and
-  never appear as callback Outputs; only the marker LayerGroup could be
-  swapped later (not needed this step — pin color is uniform).
+  never appear as callback Outputs. Only the marker LayerGroup's `children`
+  are swapped (now every tick, to recolor pins by status) — Map/TileLayer
+  themselves are never touched, so panning/zoom/tiles never reset.
 - The charts: dcc.Graph's `figure` is only ever reassigned when the
   selected sensor changes (an explicit, infrequent user action). Every
   replay tick instead writes `extendData`, which tells the client to
@@ -19,10 +25,12 @@ exactly:
 from dash import ALL, Dash, Input, Output, State, ctx, dcc, html, no_update
 
 import charts
-from data_loader import clean_readings, get_series, load_long, load_sensors
+from constants import SEVERITY_COLORS
+from data_loader import clean_readings, get_series, latest_value, load_long, load_sensors
 from event_injector import apply_injections
 from replay import build_timeline, visible_readings
-from sensor_map import MARKER_ID_TYPE, build_map
+from risk_assessment import RAINFALL_CONFIRM_MM_H, assess_risk
+from sensor_map import MARKER_ID_TYPE, MARKER_LAYER_ID, build_map, build_markers
 
 READINGS = clean_readings(load_long())
 SENSORS_META = load_sensors()
@@ -52,7 +60,7 @@ top_bar = html.Div(
         "flexWrap": "wrap",
     },
     children=[
-        html.Div(id="overall-risk-placeholder", children="Overall risk: (placeholder)"),
+        html.Div(id="overall-risk-display"),
         html.Div(id="clock-display"),
         html.Button("Play", id="play-pause-btn", n_clicks=0),
         dcc.RadioItems(id="speed-control", options=SPEED_OPTIONS, value=1000, inline=True),
@@ -75,7 +83,8 @@ left_panel_top = html.Div(
         ),
         dcc.Graph(id="water-level-graph", figure={}),
         dcc.Graph(id="rainfall-graph", figure={}),
-        html.Div(id="current-readings-placeholder", children="Current readings: (placeholder)"),
+        html.Div(id="current-readings-panel"),
+        html.Div(id="rule-eval-panel"),
     ],
 )
 
@@ -84,7 +93,7 @@ left_panel_bottom = html.Div(
     style={"borderTop": "2px solid #999", "padding": "8px", "flex": "0 0 auto"},
     children=[
         html.H4("All-sensor status"),
-        html.Div("(placeholder)"),
+        html.Div(id="all-sensor-status-panel"),
     ],
 )
 
@@ -126,7 +135,7 @@ event_log_placeholder = html.Div(
     style={"padding": "8px", "margin": "8px"},
     children=[
         html.H4("Event log"),
-        html.Div("(placeholder)"),
+        html.Div(id="event-log-content"),
     ],
 )
 
@@ -164,6 +173,12 @@ app.layout = html.Div(
         # chart callback knows whether to extendData (same sensor, one
         # tick further) or rebuild the figure (sensor just changed).
         dcc.Store(id="chart-state-store", data={"sensor_id": None, "rendered_upto_step": -1}),
+        # Append-only log entries (strings), newest kept up to MAX_LOG_ENTRIES.
+        dcc.Store(id="event-log-store", data=[]),
+        # Previous tick's per-sensor category (confirmed_flood/possible_fault/
+        # normal) — used only to detect transitions for the event log; never
+        # displayed directly. Empty dict means "no history yet" (page load).
+        dcc.Store(id="sensor-status-store", data={}),
         # disabled=True: replay opens paused at the first timestep, per
         # CLAUDE.md — history builds up as it plays, not fully populated.
         dcc.Interval(id="replay-interval", interval=1000, n_intervals=0, disabled=True),
@@ -290,6 +305,215 @@ def update_charts(sim_step, selected_sensor, chart_state):
         [0],
     )
     return no_update, water_level_extend, no_update, rainfall_extend, new_state
+
+
+# --- Risk-assessment fanout (Step 4) --------------------------------------
+
+MAX_LOG_ENTRIES = 50
+
+
+def _verdict_label(sensor_assessment) -> str:
+    if sensor_assessment.confirmed_flood:
+        return "CONFIRMED FLOOD"
+    if sensor_assessment.possible_fault:
+        return "POSSIBLE FAULT"
+    return sensor_assessment.threshold_state
+
+
+def _latest_soil_moisture(df, sensor_id):
+    """Defensive per CLAUDE.md's data contract note: soil_moisture may still
+    be per-sensor (old data) or consolidated onto a single CATCHMENT id
+    (new). Try the sensor itself first, then fall back to CATCHMENT.
+    Returns ((timestamp, value) | None, used_catchment: bool)."""
+    result = latest_value(df, sensor_id, "soil_moisture")
+    if result is not None:
+        return result, False
+    return latest_value(df, "CATCHMENT", "soil_moisture"), True
+
+
+def _render_overall_risk(overall_state: str) -> html.Span:
+    color = SEVERITY_COLORS[overall_state]
+    text_color = "#fff" if overall_state in ("Alert", "Danger", "Extreme") else "#000"
+    return html.Span(
+        f"Overall risk: {overall_state}",
+        style={
+            "backgroundColor": color,
+            "color": text_color,
+            "padding": "4px 10px",
+            "borderRadius": "4px",
+            "fontWeight": "bold",
+        },
+    )
+
+
+def _render_current_readings(sensor_assessment, rainfall_latest, soil_latest, soil_is_catchment) -> html.Div:
+    if sensor_assessment is None:
+        return html.Div([html.H4("Current readings"), html.Div("No data yet.")])
+
+    rows = [html.H4("Current readings")]
+    stage_color = SEVERITY_COLORS[sensor_assessment.threshold_state]
+    rows.append(
+        html.Div(
+            f"water_level: {sensor_assessment.latest_water_level:.1f} cm — {sensor_assessment.threshold_state}",
+            style={"color": stage_color, "fontWeight": "bold"},
+        )
+    )
+
+    if rainfall_latest is not None:
+        _, rain_value = rainfall_latest
+        flag = " (meaningful)" if rain_value >= RAINFALL_CONFIRM_MM_H else ""
+        rows.append(html.Div(f"rainfall_intensity: {rain_value:.1f} mm/h{flag}"))
+    else:
+        rows.append(html.Div("rainfall_intensity: no data"))
+
+    if soil_latest is not None:
+        _, soil_value = soil_latest
+        source = " (CATCHMENT)" if soil_is_catchment else ""
+        rows.append(html.Div(f"soil_moisture: {soil_value:.1f}%{source}"))
+    else:
+        rows.append(html.Div("soil_moisture: no data"))
+
+    return html.Div(rows)
+
+
+def _render_rule_eval(sensor_assessment) -> html.Div:
+    if sensor_assessment is None:
+        return html.Div([html.H4("Rule evaluation"), html.Div("No data yet.")])
+
+    conditions = sensor_assessment.conditions
+
+    def mark(flag: bool) -> str:
+        return "✓" if flag else "✗"
+
+    return html.Div(
+        [
+            html.H4("Rule evaluation"),
+            html.Div(f"water_level ≥ Watch: {mark(conditions['water_level_watch_plus'])}"),
+            html.Div(f"rising_fast: {mark(conditions['rising_fast'])}"),
+            html.Div(f"upstream_rain_confirmed: {mark(conditions['upstream_rain_confirmed'])}"),
+            html.Div(html.B(f"→ {_verdict_label(sensor_assessment)}")),
+        ]
+    )
+
+
+def _render_all_sensor_status(assessment) -> html.Div:
+    rows = []
+    for sensor_id in SENSOR_IDS:
+        sensor_assessment = assessment.sensors.get(sensor_id)
+        if sensor_assessment is None:
+            rows.append(html.Div(f"{sensor_id}: no data"))
+            continue
+        color = SEVERITY_COLORS[
+            sensor_assessment.threshold_state if sensor_assessment.possible_fault else sensor_assessment.effective_state
+        ]
+        rows.append(
+            html.Div(
+                [
+                    html.Span("●", style={"color": color, "marginRight": "6px"}),
+                    f"{sensor_id}: {_verdict_label(sensor_assessment)} ({sensor_assessment.latest_water_level:.0f} cm)",
+                ]
+            )
+        )
+    return html.Div(rows)
+
+
+def _sensor_category(sensor_assessment) -> str:
+    if sensor_assessment.confirmed_flood:
+        return "confirmed_flood"
+    if sensor_assessment.possible_fault:
+        return "possible_fault"
+    return "normal"
+
+
+_CATEGORY_LABELS = {"confirmed_flood": "CONFIRMED FLOOD", "possible_fault": "POSSIBLE FAULT", "normal": "Normal"}
+
+
+def _update_event_log(assessment, previous_categories: dict, log_entries: list) -> tuple[dict, list]:
+    """Edge-triggered per CLAUDE.md: append a log line only when a sensor's
+    category (confirmed_flood/possible_fault/normal) actually changes from
+    the previous tick, never on every tick. An empty `previous_categories`
+    means no history yet (page load) — seed it silently rather than logging
+    every sensor's initial state as a fake "transition"."""
+    current_categories = {sid: _sensor_category(sa) for sid, sa in assessment.sensors.items()}
+    is_first_run = not previous_categories
+    new_entries = list(log_entries)
+
+    if not is_first_run:
+        for sensor_id, category in current_categories.items():
+            previous = previous_categories.get(sensor_id)
+            if previous is not None and previous != category:
+                sa = assessment.sensors[sensor_id]
+                new_entries.append(
+                    f"{sa.latest_timestamp} — {sensor_id}: {_CATEGORY_LABELS[previous]} -> "
+                    f"{_CATEGORY_LABELS[category]} (water_level={sa.latest_water_level:.1f} cm, {sa.threshold_state})"
+                )
+
+    return current_categories, new_entries[-MAX_LOG_ENTRIES:]
+
+
+def _render_event_log(log_entries: list) -> html.Div:
+    if not log_entries:
+        return html.Div("No events yet.")
+    return html.Div([html.Div(entry) for entry in reversed(log_entries)])
+
+
+@app.callback(
+    Output(MARKER_LAYER_ID, "children"),
+    Output("overall-risk-display", "children"),
+    Output("current-readings-panel", "children"),
+    Output("rule-eval-panel", "children"),
+    Output("all-sensor-status-panel", "children"),
+    Output("event-log-content", "children"),
+    Output("event-log-store", "data"),
+    Output("sensor-status-store", "data"),
+    Input("sim-step-store", "data"),
+    Input("selected-sensor-store", "data"),
+    Input("active-events-store", "data"),
+    State("event-log-store", "data"),
+    State("sensor-status-store", "data"),
+)
+def update_risk_fanout(sim_step, selected_sensor, active_events, log_entries, previous_categories):
+    """Runs risk_assessment.assess_risk once per tick and fans its single
+    result out to every display that depends on it — the map, top bar,
+    readings/rule-eval panels, all-sensor summary, and event log all read
+    fields off the same `assessment`; none of them recompute risk.
+
+    Re-derives the injected reading frame the same way advance_replay does,
+    rather than reading a shared Store: a full DataFrame isn't something
+    worth round-tripping through JSON every tick, and apply_injections is
+    pure, so calling it again here with the same (already-pruned)
+    active_events is exactly as correct as sharing one result would be —
+    just a few extra microseconds of pandas filtering on a 10k-row frame.
+    """
+    visible = visible_readings(READINGS, TIMELINE, sim_step)
+    injected, _ = apply_injections(visible, TIMELINE, active_events, sim_step)
+
+    assessment = assess_risk(injected, SENSORS_META)
+
+    markers = build_markers(SENSORS_META, assessment.sensors)
+    overall_risk_display = _render_overall_risk(assessment.overall_state)
+
+    selected_assessment = assessment.sensors.get(selected_sensor)
+    rainfall_latest = latest_value(injected, selected_sensor, "rainfall_intensity")
+    soil_latest, soil_is_catchment = _latest_soil_moisture(injected, selected_sensor)
+    readings_panel = _render_current_readings(selected_assessment, rainfall_latest, soil_latest, soil_is_catchment)
+    rule_eval_panel = _render_rule_eval(selected_assessment)
+
+    all_sensor_panel = _render_all_sensor_status(assessment)
+
+    new_categories, new_log_entries = _update_event_log(assessment, previous_categories, log_entries)
+    event_log_display = _render_event_log(new_log_entries)
+
+    return (
+        markers,
+        overall_risk_display,
+        readings_panel,
+        rule_eval_panel,
+        all_sensor_panel,
+        event_log_display,
+        new_log_entries,
+        new_categories,
+    )
 
 
 if __name__ == "__main__":

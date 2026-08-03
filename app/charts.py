@@ -67,12 +67,22 @@ def build_water_level_figure(sensor_id: str) -> go.Figure:
 
 def update_water_level_figure(fig: go.Figure, series: pd.DataFrame) -> None:
     """Mutates `fig` in place: new x/y on the existing traces, nothing
-    about the figure's structure touched."""
-    fig.data[0].x = series["timestamp"]
-    fig.data[0].y = series["value"]
+    about the figure's structure touched.
+
+    Assigns plain Python lists, not pandas Series/numpy arrays directly:
+    Plotly.py serializes a numeric numpy-backed array using a compact
+    binary {"dtype", "bdata"} typed-array encoding rather than a plain JSON
+    array. The Dash extendData path (main.py's update_charts) later calls
+    Plotly.extendTraces on this same trace, which does `array.push(...)` on
+    the client — that throws/no-ops on a typed array (fixed-size), silently
+    breaking all future live updates. Plain lists decode to ordinary,
+    resizable JS arrays on the client, which is what extendTraces requires.
+    """
+    fig.data[0].x = series["timestamp"].tolist()
+    fig.data[0].y = series["value"].tolist()
     points = _injected_points(series)
-    fig.data[1].x = points["timestamp"]
-    fig.data[1].y = points["value"]
+    fig.data[1].x = points["timestamp"].tolist()
+    fig.data[1].y = points["value"].tolist()
 
 
 def build_rainfall_figure(sensor_id: str) -> go.Figure:
@@ -91,8 +101,10 @@ def build_rainfall_figure(sensor_id: str) -> go.Figure:
 
 
 def update_rainfall_figure(fig: go.Figure, series: pd.DataFrame) -> None:
-    fig.data[0].x = series["timestamp"]
-    fig.data[0].y = series["value"]
+    """See update_water_level_figure's docstring: plain lists, not
+    pandas/numpy arrays, so the client-side trace stays extendTraces-safe."""
+    fig.data[0].x = series["timestamp"].tolist()
+    fig.data[0].y = series["value"].tolist()
     points = _injected_points(series)
-    fig.data[1].x = points["timestamp"]
-    fig.data[1].y = points["value"]
+    fig.data[1].x = points["timestamp"].tolist()
+    fig.data[1].y = points["value"].tolist()
