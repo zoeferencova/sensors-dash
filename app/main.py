@@ -22,6 +22,7 @@ The two flicker-sensitive pieces from Step 3 still hold:
   no re-render, no teardown.
 """
 
+import plotly.graph_objects as go
 from dash import ALL, Dash, Input, Output, State, ctx, dcc, html, no_update
 
 import charts
@@ -92,8 +93,12 @@ left_panel_top = html.Div(
             value=DEFAULT_SENSOR,
             clearable=False,
         ),
-        dcc.Graph(id="water-level-graph", figure={}),
-        dcc.Graph(id="rainfall-graph", figure={}),
+        # A real (if empty) Figure rather than {} — Plotly.js otherwise logs
+        # a harmless but noisy "doesn't yet have a plot" warning on first
+        # paint, before update_charts's initial call replaces it moments
+        # later anyway.
+        dcc.Graph(id="water-level-graph", figure=go.Figure()),
+        dcc.Graph(id="rainfall-graph", figure=go.Figure()),
         html.Div(id="current-readings-panel"),
         html.Div(id="rule-eval-panel"),
     ],
@@ -236,18 +241,6 @@ app.layout = html.Div(
 
 
 @app.callback(
-    Output("replay-interval", "disabled"),
-    Output("play-pause-btn", "children"),
-    Input("play-pause-btn", "n_clicks"),
-    State("replay-interval", "disabled"),
-    prevent_initial_call=True,
-)
-def toggle_play_pause(_n_clicks, is_disabled):
-    now_disabled = not is_disabled
-    return now_disabled, "Play" if now_disabled else "Pause"
-
-
-@app.callback(
     Output("replay-interval", "interval"),
     Input("speed-control", "value"),
 )
@@ -259,35 +252,48 @@ def set_speed(interval_ms):
     Output("sim-step-store", "data"),
     Output("active-events-store", "data"),
     Output("clock-display", "children"),
+    Output("replay-interval", "disabled"),
+    Output("play-pause-btn", "children"),
     Input("replay-interval", "n_intervals"),
+    Input("play-pause-btn", "n_clicks"),
     Input("injector-trigger-btn", "n_clicks"),
     Input("injector-reset-btn", "n_clicks"),
     State("active-events-store", "data"),
     State("injector-scenario-select", "value"),
     State("injector-target-sensor-select", "value"),
+    State("replay-interval", "disabled"),
 )
-def advance_replay(n_intervals, _trigger_clicks, _reset_clicks, active_events_raw, scenario, target_sensor):
-    """Owns active-events-store, which Dash requires be written by exactly
-    one callback — so the injector's Trigger/Reset buttons are Inputs here
-    too, alongside the replay tick, branching on ctx.triggered_id. sim_step
-    is a pure function of n_intervals (clamped to the last timestep) and is
-    recomputed the same way regardless of which Input fired, since Trigger
-    needs "now" as the new event's trigger_step.
-
-    Reset and Trigger leave sim-step-store/clock-display untouched
-    (no_update) — only a replay tick actually advances the clock.
+def advance_replay(
+    n_intervals, _play_clicks, _trigger_clicks, _reset_clicks, active_events_raw, scenario, target_sensor, is_disabled
+):
+    """Owns active-events-store AND replay-interval/play-pause-btn, since
+    Dash requires exactly one callback per Output and both are now touched
+    from more than one control (the tick itself, Play/Pause, Trigger,
+    Reset) — branches on ctx.triggered_id. sim_step is a pure function of
+    n_intervals (clamped to the last timestep) and is recomputed the same
+    way regardless of which Input fired, since Trigger needs "now" as the
+    new event's trigger_step.
     """
     sim_step = min(n_intervals, len(TIMELINE) - 1)
     triggered = ctx.triggered_id
 
+    if triggered == "play-pause-btn":
+        now_disabled = not is_disabled
+        return no_update, no_update, no_update, now_disabled, ("Play" if now_disabled else "Pause")
+
     if triggered == "injector-reset-btn":
-        return no_update, [], no_update
+        # active_events_raw is already the raw (dict) list — no need to
+        # deserialize just to check emptiness. Skips a spurious Store write
+        # (and the callbacks it would re-trigger) when there was nothing to
+        # clear.
+        events_output = no_update if not active_events_raw else []
+        return no_update, events_output, no_update, no_update, no_update
 
     active_events = events_from_store(active_events_raw)
 
     if triggered == "injector-trigger-btn":
         new_event = build_event(scenario, target_sensor, DEFAULT_MAGNITUDE[scenario], sim_step)
-        return no_update, events_to_store(active_events + [new_event]), no_update
+        return no_update, events_to_store(active_events + [new_event]), no_update, no_update, no_update
 
     # Default path: a replay-interval tick (or the initial page-load call).
     # Never fires while paused, since a disabled dcc.Interval simply doesn't
@@ -302,7 +308,26 @@ def advance_replay(n_intervals, _trigger_clicks, _reset_clicks, active_events_ra
             html.Span(f"  |  timestamp: {current_time}"),
         ]
     )
-    return sim_step, events_to_store(still_active), display
+
+    # Only write active-events-store when an event actually expired this
+    # tick — writing a freshly-reserialized-but-value-identical list every
+    # tick regardless would spuriously re-trigger every callback that Inputs
+    # on this Store (update_charts, update_risk_fanout) on EVERY tick, not
+    # just when something real changed. That doubled invocation rate is
+    # exactly what widens the window for response-ordering races (e.g. a
+    # sensor switch landing right on a tick can otherwise show the
+    # previous sensor's chart title).
+    events_unchanged = events_signature(still_active) == events_signature(active_events)
+    events_output = no_update if events_unchanged else events_to_store(still_active)
+
+    # Auto-pause once the replay reaches the last timestep — otherwise the
+    # Interval keeps firing forever with nothing left to advance to, and
+    # "Pause" stays displayed even though playback has effectively stopped.
+    at_end = sim_step >= len(TIMELINE) - 1
+    disabled_output = True if at_end else no_update
+    button_output = "Play" if at_end else no_update
+
+    return sim_step, events_output, display, disabled_output, button_output
 
 
 @app.callback(
@@ -443,7 +468,14 @@ def _latest_soil_moisture(df, sensor_id):
     result = latest_value(df, sensor_id, "soil_moisture")
     if result is not None:
         return result, False
-    return latest_value(df, "CATCHMENT", "soil_moisture"), True
+    catchment_result = latest_value(df, "CATCHMENT", "soil_moisture")
+    # used_catchment must reflect whether the fallback actually found
+    # something — not just that it was attempted. Otherwise "no soil_moisture
+    # anywhere at all" (result is None) reports used_catchment=True, which is
+    # wrong (there's no CATCHMENT data to have used) even though it's
+    # currently harmless: the caller only checks this flag when a value
+    # exists.
+    return catchment_result, catchment_result is not None
 
 
 def _render_overall_risk(overall_state: str) -> html.Span:

@@ -41,7 +41,17 @@ def injected_points(series: pd.DataFrame) -> pd.DataFrame:
 
 def build_water_level_figure(sensor_id: str) -> go.Figure:
     """Structure only — no data yet. Call update_water_level_figure right
-    after to populate it, and on every tick thereafter."""
+    after to populate it, and on every tick thereafter.
+
+    template=None (below) drops plotly.py's embedded default theme from the
+    serialized figure — several KB of colorscale/font/background JSON that
+    Plotly.js already applies as its own client-side default when no
+    template is given, so this is a payload-size cut with no visual change.
+    Smaller payload matters here specifically because this full-figure
+    rebuild only fires occasionally (sensor switch, event trigger) while
+    tiny extendData responses fire every tick; a slow-to-transmit rebuild
+    response can otherwise arrive after a newer/faster one and clobber it.
+    """
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=[], y=[], mode="lines", name="water_level", line=dict(color="#1f4e79"), showlegend=False))
     fig.add_trace(_injected_marker_trace())
@@ -61,6 +71,7 @@ def build_water_level_figure(sensor_id: str) -> go.Figure:
         yaxis_title="water_level (cm)",
         margin=dict(t=40, r=80),
         legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        template=None,
     )
     return fig
 
@@ -96,6 +107,7 @@ def build_rainfall_figure(sensor_id: str) -> go.Figure:
         yaxis_title="mm/h",
         margin=dict(t=40),
         legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        template=None,
     )
     return fig
 
