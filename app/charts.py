@@ -33,7 +33,7 @@ def _injected_marker_trace() -> go.Scatter:
     )
 
 
-def _injected_points(series: pd.DataFrame) -> pd.DataFrame:
+def injected_points(series: pd.DataFrame) -> pd.DataFrame:
     if "injected" not in series.columns or not series["injected"].any():
         return series.iloc[0:0]
     return series[series["injected"]]
@@ -80,7 +80,7 @@ def update_water_level_figure(fig: go.Figure, series: pd.DataFrame) -> None:
     """
     fig.data[0].x = series["timestamp"].tolist()
     fig.data[0].y = series["value"].tolist()
-    points = _injected_points(series)
+    points = injected_points(series)
     fig.data[1].x = points["timestamp"].tolist()
     fig.data[1].y = points["value"].tolist()
 
@@ -105,6 +105,6 @@ def update_rainfall_figure(fig: go.Figure, series: pd.DataFrame) -> None:
     pandas/numpy arrays, so the client-side trace stays extendTraces-safe."""
     fig.data[0].x = series["timestamp"].tolist()
     fig.data[0].y = series["value"].tolist()
-    points = _injected_points(series)
+    points = injected_points(series)
     fig.data[1].x = points["timestamp"].tolist()
     fig.data[1].y = points["value"].tolist()

@@ -35,6 +35,13 @@ SCENARIOS = [
     "Saturated antecedent",
 ]
 
+# "Catchment-wide event" hits every sensor at once (per its own propagation
+# lags) and has no single target; the other three scenarios apply to one
+# chosen sensor. The Dash injector panel uses this to show/hide its
+# target-sensor control per scenario, rather than hardcoding the scenario
+# names a second time.
+SCENARIOS_NEEDING_TARGET = {"Convective storm", "Sensor fault", "Saturated antecedent"}
+
 # Shown under the scenario picker. Kept to the mechanism + the gotcha, not a
 # restatement of the scenario name the dropdown already shows.
 SCENARIO_DESCRIPTIONS = {
@@ -239,7 +246,70 @@ def apply_injections(
     return result, still_active
 
 
+# --- dcc.Store (de)serialization ------------------------------------------
+#
+# InjectedEvent/Delta are dataclasses, not natively JSON-serializable — but
+# a dcc.Store's `data` prop has to round-trip through JSON to the browser
+# and back (Dash has no session_state to just hold live Python objects in).
+# These are the sole boundary where that conversion happens; apply_injections
+# and build_event keep working with real InjectedEvent/Delta objects and
+# don't need to know their caller persists them as plain dicts.
+
+
+def event_to_dict(event: InjectedEvent) -> dict:
+    return {
+        "scenario": event.scenario,
+        "target_sensor": event.target_sensor,
+        "magnitude": event.magnitude,
+        "trigger_step": event.trigger_step,
+        "deltas": [
+            {
+                "sensor_id": d.sensor_id,
+                "variable": d.variable,
+                "peak": d.peak,
+                "rise": d.rise,
+                "hold": d.hold,
+                "decay": d.decay,
+                "lag_offset": d.lag_offset,
+                "mode": d.mode,
+            }
+            for d in event.deltas
+        ],
+    }
+
+
+def event_from_dict(data: dict) -> InjectedEvent:
+    deltas = [Delta(**delta) for delta in data["deltas"]]
+    return InjectedEvent(
+        scenario=data["scenario"],
+        target_sensor=data["target_sensor"],
+        magnitude=data["magnitude"],
+        trigger_step=data["trigger_step"],
+        deltas=deltas,
+    )
+
+
+def events_from_store(raw_events: list) -> list[InjectedEvent]:
+    """dcc.Store's raw `data` (list of dicts) -> InjectedEvent objects."""
+    return [event_from_dict(e) for e in raw_events]
+
+
+def events_to_store(events: list[InjectedEvent]) -> list[dict]:
+    """InjectedEvent objects -> plain dicts, ready for a dcc.Store's `data`."""
+    return [event_to_dict(e) for e in events]
+
+
+def events_signature(events: list[InjectedEvent]) -> tuple:
+    """Stable, order-independent fingerprint of an active-events list. Used
+    by the chart callback to tell "the active set actually changed" (a new
+    trigger, an expiry) apart from "the same events, re-serialized this
+    tick" — active_events round-trips through events_to_store/
+    events_from_store every tick regardless of whether anything changed, so
+    object identity can't be used to detect a real change."""
+    return tuple(sorted((e.trigger_step, e.scenario, e.target_sensor or "") for e in events))
+
+
 # render_sidebar_controls / render_sidebar_status / init_injector_state were
 # Streamlit sidebar renderers (st.sidebar.*, st.session_state) and are not
-# ported here — the injector UI gets rebuilt as Dash callbacks in a later
-# step, driven by a dcc.Store("active_events") + dcc.Store("sim_step").
+# ported here — the injector UI is Dash callbacks in main.py, driven by
+# dcc.Store("active-events-store") + dcc.Store("sim-step-store").

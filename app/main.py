@@ -27,7 +27,18 @@ from dash import ALL, Dash, Input, Output, State, ctx, dcc, html, no_update
 import charts
 from constants import SEVERITY_COLORS
 from data_loader import clean_readings, get_series, latest_value, load_long, load_sensors
-from event_injector import apply_injections
+from event_injector import (
+    DEFAULT_MAGNITUDE,
+    SCENARIO_DESCRIPTIONS,
+    SCENARIOS,
+    SCENARIOS_NEEDING_TARGET,
+    UPSTREAM_SENSOR_ID,
+    apply_injections,
+    build_event,
+    events_from_store,
+    events_signature,
+    events_to_store,
+)
 from replay import build_timeline, visible_readings
 from risk_assessment import RAINFALL_CONFIRM_MM_H, assess_risk
 from sensor_map import MARKER_ID_TYPE, MARKER_LAYER_ID, build_map, build_markers
@@ -116,7 +127,9 @@ map_panel = html.Div(id="map-panel", style={"flex": "1 1 auto", "minWidth": 0}, 
 
 # --- Right panel ----------------------------------------------------------
 
-injector_placeholder = html.Div(
+DEFAULT_TARGET_SENSOR = UPSTREAM_SENSOR_ID if UPSTREAM_SENSOR_ID in SENSOR_IDS else DEFAULT_SENSOR
+
+injector_panel = html.Div(
     id="injector-placeholder",
     style={
         "border": "2px dashed #b35900",
@@ -126,7 +139,40 @@ injector_placeholder = html.Div(
     },
     children=[
         html.H4("Event injector"),
-        html.Div("(placeholder — scenario controls come in a later step)"),
+        html.Div(
+            "Overlays synthetic readings onto the stream assess_risk sees. It "
+            "never sets the risk state directly, and never touches the "
+            "underlying dataset — Reset always returns to a clean replay.",
+            style={"fontSize": "0.8em", "marginBottom": "8px"},
+        ),
+        html.Label("Scenario"),
+        dcc.Dropdown(
+            id="injector-scenario-select",
+            options=[{"label": s, "value": s} for s in SCENARIOS],
+            value=SCENARIOS[0],
+            clearable=False,
+        ),
+        html.Div(id="injector-scenario-description", style={"fontSize": "0.8em", "margin": "6px 0"}),
+        html.Div(
+            id="injector-target-sensor-row",
+            children=[
+                html.Label("Target sensor"),
+                dcc.Dropdown(
+                    id="injector-target-sensor-select",
+                    options=[{"label": sid, "value": sid} for sid in SENSOR_IDS],
+                    value=DEFAULT_TARGET_SENSOR,
+                    clearable=False,
+                ),
+            ],
+        ),
+        html.Div(
+            style={"display": "flex", "gap": "8px", "marginTop": "8px"},
+            children=[
+                html.Button("Trigger scenario", id="injector-trigger-btn", n_clicks=0),
+                html.Button("Reset injected events", id="injector-reset-btn", n_clicks=0),
+            ],
+        ),
+        html.Div(id="injector-active-events-display", style={"marginTop": "8px"}),
     ],
 )
 
@@ -142,7 +188,7 @@ event_log_placeholder = html.Div(
 right_panel = html.Div(
     id="right-panel",
     style={"width": "300px", "flex": "0 0 300px", "display": "flex", "flexDirection": "column", "minHeight": 0},
-    children=[injector_placeholder, event_log_placeholder],
+    children=[injector_panel, event_log_placeholder],
 )
 
 # --- Assemble ----------------------------------------------------------
@@ -214,21 +260,39 @@ def set_speed(interval_ms):
     Output("active-events-store", "data"),
     Output("clock-display", "children"),
     Input("replay-interval", "n_intervals"),
+    Input("injector-trigger-btn", "n_clicks"),
+    Input("injector-reset-btn", "n_clicks"),
     State("active-events-store", "data"),
+    State("injector-scenario-select", "value"),
+    State("injector-target-sensor-select", "value"),
 )
-def advance_replay(n_intervals, active_events):
-    """Runs once on page load (n_intervals=0, paused) and again on every
-    Interval tick thereafter — it never fires while paused, since a
-    disabled dcc.Interval simply doesn't tick. sim_step is a pure function
-    of n_intervals, clamped to the last timestep so replay stops rather than
-    erroring once the data runs out."""
-    sim_step = min(n_intervals, len(TIMELINE) - 1)
-    visible = visible_readings(READINGS, TIMELINE, sim_step)
+def advance_replay(n_intervals, _trigger_clicks, _reset_clicks, active_events_raw, scenario, target_sensor):
+    """Owns active-events-store, which Dash requires be written by exactly
+    one callback — so the injector's Trigger/Reset buttons are Inputs here
+    too, alongside the replay tick, branching on ctx.triggered_id. sim_step
+    is a pure function of n_intervals (clamped to the last timestep) and is
+    recomputed the same way regardless of which Input fired, since Trigger
+    needs "now" as the new event's trigger_step.
 
-    # active_events is always [] today (no injector UI yet), so this is a
-    # no-op — but it's the exact call the injector's Trigger button will
-    # feed into later: readings in, (injected readings, pruned still-active
-    # list) out, written straight back to active-events-store.
+    Reset and Trigger leave sim-step-store/clock-display untouched
+    (no_update) — only a replay tick actually advances the clock.
+    """
+    sim_step = min(n_intervals, len(TIMELINE) - 1)
+    triggered = ctx.triggered_id
+
+    if triggered == "injector-reset-btn":
+        return no_update, [], no_update
+
+    active_events = events_from_store(active_events_raw)
+
+    if triggered == "injector-trigger-btn":
+        new_event = build_event(scenario, target_sensor, DEFAULT_MAGNITUDE[scenario], sim_step)
+        return no_update, events_to_store(active_events + [new_event]), no_update
+
+    # Default path: a replay-interval tick (or the initial page-load call).
+    # Never fires while paused, since a disabled dcc.Interval simply doesn't
+    # tick.
+    visible = visible_readings(READINGS, TIMELINE, sim_step)
     _injected, still_active = apply_injections(visible, TIMELINE, active_events, sim_step)
 
     current_time = TIMELINE[sim_step]
@@ -238,7 +302,7 @@ def advance_replay(n_intervals, active_events):
             html.Span(f"  |  timestamp: {current_time}"),
         ]
     )
-    return sim_step, still_active, display
+    return sim_step, events_to_store(still_active), display
 
 
 @app.callback(
@@ -258,6 +322,24 @@ def select_sensor(dropdown_value, _marker_clicks):
 
 
 @app.callback(
+    Output("injector-scenario-description", "children"),
+    Output("injector-target-sensor-row", "style"),
+    Input("injector-scenario-select", "value"),
+)
+def update_injector_scenario_controls(scenario):
+    """Scenario picker drives the description text and whether the
+    target-sensor control is shown at all — "Catchment-wide event" hits
+    every sensor per CLAUDE.md, so it has no single target
+    (SCENARIOS_NEEDING_TARGET is the same set build_event's scenarios use,
+    not re-derived here). Magnitude is a fixed per-scenario preset
+    (DEFAULT_MAGNITUDE, used directly by the Trigger callback) rather than
+    a control — one less thing to configure or explain."""
+    description = SCENARIO_DESCRIPTIONS[scenario]
+    target_row_style = {} if scenario in SCENARIOS_NEEDING_TARGET else {"display": "none"}
+    return description, target_row_style
+
+
+@app.callback(
     Output("water-level-graph", "figure"),
     Output("water-level-graph", "extendData"),
     Output("rainfall-graph", "figure"),
@@ -265,23 +347,40 @@ def select_sensor(dropdown_value, _marker_clicks):
     Output("chart-state-store", "data"),
     Input("sim-step-store", "data"),
     Input("selected-sensor-store", "data"),
+    Input("active-events-store", "data"),
     State("chart-state-store", "data"),
 )
-def update_charts(sim_step, selected_sensor, chart_state):
+def update_charts(sim_step, selected_sensor, active_events_raw, chart_state):
     """The extendData pattern (CLAUDE.md tech stack notes): on a sensor
-    change, rebuild both figures from scratch with the full history visible
-    so far (an explicit, infrequent user action — a full figure resend here
-    is fine). On every other call (a replay tick with the same sensor
-    selected), only the row(s) newer than what's already drawn are sent via
-    extendData, so the figure itself is never reassigned during playback."""
+    change OR the active-events set actually changing, rebuild both figures
+    from scratch with the full history visible so far (both are explicit,
+    infrequent actions — a full figure resend is fine). On every other call
+    (a replay tick, same sensor, same events), only the row(s) newer than
+    what's already drawn are sent via extendData.
+
+    A just-triggered event needs the full-rebuild path even though it
+    doesn't change sim_step: build_event's trigger_step is "now", and
+    _pulse returns a nonzero factor at relative_step=0 — so the CURRENTLY
+    visible point's value changes retroactively the instant an event is
+    triggered (or reverts the instant one expires/is reset). A signature
+    over the active set (not just its length) catches both directions.
+    """
+    active_events = events_from_store(active_events_raw)
     visible = visible_readings(READINGS, TIMELINE, sim_step)
-    water_level_series = get_series(visible, selected_sensor, "water_level")
-    rainfall_series = get_series(visible, selected_sensor, "rainfall_intensity")
+    injected, _ = apply_injections(visible, TIMELINE, active_events, sim_step)
+    water_level_series = get_series(injected, selected_sensor, "water_level")
+    rainfall_series = get_series(injected, selected_sensor, "rainfall_intensity")
 
+    current_signature = events_signature(active_events)
     sensor_changed = chart_state.get("sensor_id") != selected_sensor
-    new_state = {"sensor_id": selected_sensor, "rendered_upto_step": sim_step}
+    events_changed = chart_state.get("events_signature") != current_signature
+    new_state = {
+        "sensor_id": selected_sensor,
+        "rendered_upto_step": sim_step,
+        "events_signature": current_signature,
+    }
 
-    if sensor_changed:
+    if sensor_changed or events_changed:
         water_level_fig = charts.build_water_level_figure(selected_sensor)
         charts.update_water_level_figure(water_level_fig, water_level_series)
         rainfall_fig = charts.build_rainfall_figure(selected_sensor)
@@ -296,13 +395,29 @@ def update_charts(sim_step, selected_sensor, chart_state):
     new_water_level = water_level_series[water_level_series["timestamp"] > cutoff]
     new_rainfall = rainfall_series[rainfall_series["timestamp"] > cutoff]
 
+    # Trace 0 (main line/bar) always gets the new point(s); trace 1 (the
+    # "simulated event" diamond overlay) gets only whichever of those are
+    # flagged injected — possibly none, a harmless empty extend for that
+    # trace. Without this, only the very first point of a multi-tick
+    # injected event (sent by the full-rebuild that fires on trigger) would
+    # ever show the marker; later ticks during the same event would raise
+    # the line correctly but silently drop the "this is simulated" flag.
+    new_water_level_injected = charts.injected_points(new_water_level)
+    new_rainfall_injected = charts.injected_points(new_rainfall)
+
     water_level_extend = (
-        {"x": [new_water_level["timestamp"].tolist()], "y": [new_water_level["value"].tolist()]},
-        [0],
+        {
+            "x": [new_water_level["timestamp"].tolist(), new_water_level_injected["timestamp"].tolist()],
+            "y": [new_water_level["value"].tolist(), new_water_level_injected["value"].tolist()],
+        },
+        [0, 1],
     )
     rainfall_extend = (
-        {"x": [new_rainfall["timestamp"].tolist()], "y": [new_rainfall["value"].tolist()]},
-        [0],
+        {
+            "x": [new_rainfall["timestamp"].tolist(), new_rainfall_injected["timestamp"].tolist()],
+            "y": [new_rainfall["value"].tolist(), new_rainfall_injected["value"].tolist()],
+        },
+        [0, 1],
     )
     return no_update, water_level_extend, no_update, rainfall_extend, new_state
 
@@ -457,6 +572,28 @@ def _render_event_log(log_entries: list) -> html.Div:
     return html.Div([html.Div(entry) for entry in reversed(log_entries)])
 
 
+def _render_active_events(active_events: list, sim_step: int) -> html.Div:
+    """The injector panel's "still active" readout — mirrors the original
+    Streamlit render_sidebar_status, minus session_state: steps-remaining
+    counts down as sim_step advances since this re-renders every tick."""
+    if not active_events:
+        return html.Div("None — clean replay.", style={"fontSize": "0.85em"})
+    rows = []
+    for event in active_events:
+        remaining = max(event.duration - (sim_step - event.trigger_step), 0)
+        label = event.scenario
+        if event.target_sensor:
+            label += f" @ {event.target_sensor}"
+        rows.append(html.Div(f"{label} — magnitude {event.magnitude:g}, {remaining} steps left", style={"fontSize": "0.85em"}))
+    return html.Div(rows)
+
+
+def _render_top_bar_injector_slot(active_events: list) -> str:
+    if not active_events:
+        return ""
+    return f"{len(active_events)} active injected event(s)"
+
+
 @app.callback(
     Output(MARKER_LAYER_ID, "children"),
     Output("overall-risk-display", "children"),
@@ -466,13 +603,15 @@ def _render_event_log(log_entries: list) -> html.Div:
     Output("event-log-content", "children"),
     Output("event-log-store", "data"),
     Output("sensor-status-store", "data"),
+    Output("injector-active-events-display", "children"),
+    Output("top-bar-injector-slot", "children"),
     Input("sim-step-store", "data"),
     Input("selected-sensor-store", "data"),
     Input("active-events-store", "data"),
     State("event-log-store", "data"),
     State("sensor-status-store", "data"),
 )
-def update_risk_fanout(sim_step, selected_sensor, active_events, log_entries, previous_categories):
+def update_risk_fanout(sim_step, selected_sensor, active_events_raw, log_entries, previous_categories):
     """Runs risk_assessment.assess_risk once per tick and fans its single
     result out to every display that depends on it — the map, top bar,
     readings/rule-eval panels, all-sensor summary, and event log all read
@@ -485,6 +624,7 @@ def update_risk_fanout(sim_step, selected_sensor, active_events, log_entries, pr
     active_events is exactly as correct as sharing one result would be —
     just a few extra microseconds of pandas filtering on a 10k-row frame.
     """
+    active_events = events_from_store(active_events_raw)
     visible = visible_readings(READINGS, TIMELINE, sim_step)
     injected, _ = apply_injections(visible, TIMELINE, active_events, sim_step)
 
@@ -504,6 +644,9 @@ def update_risk_fanout(sim_step, selected_sensor, active_events, log_entries, pr
     new_categories, new_log_entries = _update_event_log(assessment, previous_categories, log_entries)
     event_log_display = _render_event_log(new_log_entries)
 
+    active_events_display = _render_active_events(active_events, sim_step)
+    top_bar_injector_slot = _render_top_bar_injector_slot(active_events)
+
     return (
         markers,
         overall_risk_display,
@@ -513,6 +656,8 @@ def update_risk_fanout(sim_step, selected_sensor, active_events, log_entries, pr
         event_log_display,
         new_log_entries,
         new_categories,
+        active_events_display,
+        top_bar_injector_slot,
     )
 
 
