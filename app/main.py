@@ -224,6 +224,17 @@ app.layout = html.Div(
         # chart callback knows whether to extendData (same sensor, one
         # tick further) or rebuild the figure (sensor just changed).
         dcc.Store(id="chart-state-store", data={"sensor_id": None, "rendered_upto_step": -1}),
+        # A computed chart update, tagged with what it was computed FOR
+        # (sensor + active events) — never applied directly to the graphs.
+        # apply_chart_render_payload (a clientside callback) is the only
+        # thing that reads this, and it re-checks the tag against the
+        # LIVE selected-sensor-store/active-events-store values at the
+        # moment it actually runs (not whenever the server happened to
+        # compute this payload) before touching the graphs. This is what
+        # closes the sensor-switch-vs-tick race: a slow tick response
+        # computed for the sensor you've since switched away from gets
+        # discarded here instead of silently overwriting the graph.
+        dcc.Store(id="chart-render-payload-store", data=None),
         # Append-only log entries (strings), newest kept up to MAX_LOG_ENTRIES.
         dcc.Store(id="event-log-store", data=[]),
         # Previous tick's per-sensor category (confirmed_flood/possible_fault/
@@ -365,11 +376,7 @@ def update_injector_scenario_controls(scenario):
 
 
 @app.callback(
-    Output("water-level-graph", "figure"),
-    Output("water-level-graph", "extendData"),
-    Output("rainfall-graph", "figure"),
-    Output("rainfall-graph", "extendData"),
-    Output("chart-state-store", "data"),
+    Output("chart-render-payload-store", "data"),
     Input("sim-step-store", "data"),
     Input("selected-sensor-store", "data"),
     Input("active-events-store", "data"),
@@ -389,6 +396,23 @@ def update_charts(sim_step, selected_sensor, active_events_raw, chart_state):
     visible point's value changes retroactively the instant an event is
     triggered (or reverts the instant one expires/is reset). A signature
     over the active set (not just its length) catches both directions.
+
+    This does NOT write the graphs — or chart-state-store — directly. A
+    tick's computation here and a sensor-switch's computation here are two
+    independent server round trips that can arrive back out of order; if
+    either wrote straight to the graphs (or even just to chart-state-store,
+    which is what this function's OWN sensor_changed/events_changed check
+    below reads), a slow tick response for the sensor you've since switched
+    away from could land after the switch's rebuild, silently overwrite it
+    with the wrong sensor's data, and corrupt chart-state-store into
+    thinking the wrong sensor is current — which would then make the NEXT
+    correct rebuild attempt compute from that same corrupted premise too.
+    Instead this writes a tagged payload (including the chart_state it
+    would like to commit) to chart-render-payload-store; the clientside
+    callback below re-checks the (sensor, active_events) tag against what's
+    actually live at the moment it runs, and only commits chart-state-store
+    — atomically with the matching figure/extendData — when the tag still
+    matches. A rejected payload touches nothing, ever.
     """
     active_events = events_from_store(active_events_raw)
     visible = visible_readings(READINGS, TIMELINE, sim_step)
@@ -404,17 +428,24 @@ def update_charts(sim_step, selected_sensor, active_events_raw, chart_state):
         "rendered_upto_step": sim_step,
         "events_signature": current_signature,
     }
+    payload_base = {"sensor_id": selected_sensor, "active_events": active_events_raw, "new_state": new_state}
 
     if sensor_changed or events_changed:
         water_level_fig = charts.build_water_level_figure(selected_sensor)
         charts.update_water_level_figure(water_level_fig, water_level_series)
         rainfall_fig = charts.build_rainfall_figure(selected_sensor)
         charts.update_rainfall_figure(rainfall_fig, rainfall_series)
-        return water_level_fig, no_update, rainfall_fig, no_update, new_state
+        return {
+            **payload_base,
+            "water_level_figure": water_level_fig,
+            "water_level_extend": None,
+            "rainfall_figure": rainfall_fig,
+            "rainfall_extend": None,
+        }
 
     last_rendered_step = chart_state.get("rendered_upto_step", -1)
     if sim_step <= last_rendered_step:
-        return no_update, no_update, no_update, no_update, chart_state
+        return no_update
 
     cutoff = TIMELINE[last_rendered_step]
     new_water_level = water_level_series[water_level_series["timestamp"] > cutoff]
@@ -444,7 +475,56 @@ def update_charts(sim_step, selected_sensor, active_events_raw, chart_state):
         },
         [0, 1],
     )
-    return no_update, water_level_extend, no_update, rainfall_extend, new_state
+    return {
+        **payload_base,
+        "water_level_figure": None,
+        "water_level_extend": water_level_extend,
+        "rainfall_figure": None,
+        "rainfall_extend": rainfall_extend,
+    }
+
+
+app.clientside_callback(
+    """
+    function(payload, currentSensor, currentActiveEvents) {
+        const noUp = window.dash_clientside.no_update;
+        if (!payload) {
+            return [noUp, noUp, noUp, noUp, noUp];
+        }
+        // The staleness guard: this payload was computed for a specific
+        // (sensor, active_events) pair on the server, possibly several
+        // ticks ago if its response was slow to arrive. Only apply it if
+        // that pair still matches what's LIVE right now — read at the
+        // moment this function actually runs, not whenever the server
+        // started computing. A payload for a sensor you've since switched
+        // away from (or an active-events set that's since changed) is
+        // discarded here instead of silently overwriting the graphs —
+        // including its proposed chart-state-store commit, so a rejected
+        // payload can never corrupt the bookkeeping a later, correct
+        // payload's own sensor_changed/events_changed check relies on.
+        const sameSensor = payload.sensor_id === currentSensor;
+        const sameEvents = JSON.stringify(payload.active_events) === JSON.stringify(currentActiveEvents);
+        if (!sameSensor || !sameEvents) {
+            return [noUp, noUp, noUp, noUp, noUp];
+        }
+        return [
+            payload.water_level_figure === null ? noUp : payload.water_level_figure,
+            payload.water_level_extend === null ? noUp : payload.water_level_extend,
+            payload.rainfall_figure === null ? noUp : payload.rainfall_figure,
+            payload.rainfall_extend === null ? noUp : payload.rainfall_extend,
+            payload.new_state,
+        ];
+    }
+    """,
+    Output("water-level-graph", "figure"),
+    Output("water-level-graph", "extendData"),
+    Output("rainfall-graph", "figure"),
+    Output("rainfall-graph", "extendData"),
+    Output("chart-state-store", "data"),
+    Input("chart-render-payload-store", "data"),
+    State("selected-sensor-store", "data"),
+    State("active-events-store", "data"),
+)
 
 
 # --- Risk-assessment fanout (Step 4) --------------------------------------
