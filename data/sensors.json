@@ -1,0 +1,30 @@
+[
+  {
+    "sensor_id": "S01",
+    "name": "Below Záběhlický rybník outflow",
+    "lat": 50.05453,
+    "lon": 14.48059,
+    "role": "Upstream boundary / lead-time"
+  },
+  {
+    "sensor_id": "S02",
+    "name": "Vršovice (Sámova/Vršovická)",
+    "lat": 50.06773,
+    "lon": 14.45010,
+    "role": "Residential assets at risk"
+  },
+  {
+    "sensor_id": "S03",
+    "name": "Nusle (Folimanka/Ostrčilovo nám.)",
+    "lat": 50.06653,
+    "lon": 14.43147,
+    "role": "Urban core; coincides with real ČHMÚ gauge"
+  },
+  {
+    "sensor_id": "S04",
+    "name": "Vltava confluence (Výtoň/Vyšehrad)",
+    "lat": 50.06703,
+    "lon": 14.41488,
+    "role": "Terminal gauge / confluence"
+  }
+]
