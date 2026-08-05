@@ -218,17 +218,33 @@ top_bar = html.Div(
 
 left_panel_top = html.Div(
     id="left-panel-top",
-    style={"flex": "1 1 auto", "overflowY": "auto", "padding": "8px"},
+    className="left-panel-top",
     children=[
-        html.H4("Sensor Status", style={"marginTop": "4px"}),
+        html.Div("Sensor status", className="section-label"),
         html.Div(id="sensor-tabs", className="sensor-tabs", children=build_sensor_tabs(DEFAULT_SENSOR)),
+        # Readings sit ABOVE the charts: they're the "what is it right now"
+        # answer, and the charts are the supporting history. The panel's own
+        # children are rendered per tick by update_risk_fanout.
+        html.Div("Current readings", className="section-label"),
+        html.Div(id="current-readings-panel"),
         # A real (if empty) Figure rather than {} — Plotly.js otherwise logs
         # a harmless but noisy "doesn't yet have a plot" warning on first
         # paint, before update_charts's initial call replaces it moments
         # later anyway.
-        dcc.Graph(id="water-level-graph", figure=go.Figure()),
-        dcc.Graph(id="rainfall-graph", figure=go.Figure()),
-        html.Div(id="current-readings-panel"),
+        #
+        # Each chart sits in a .chart-slot whose height comes from the CSS.
+        # The slot is needed because responsive=True makes dcc.Graph put an
+        # inline `height: 100%` on its own wrapper, which outranks any class
+        # rule — so the height has to be set on a parent for the Graph to
+        # fill. Sizing this way keeps height out of the Figure's layout, so
+        # charts.py still builds structure-only figures and a resize stays
+        # layout-only (Plotly.Plots.resize) — the extendData append path is
+        # untouched.
+        html.Div(className="chart-slot", children=dcc.Graph(id="water-level-graph", responsive=True, figure=go.Figure())),
+        html.Div(
+            className="chart-slot chart-slot-short",
+            children=dcc.Graph(id="rainfall-graph", responsive=True, figure=go.Figure()),
+        ),
         # <details>/<summary> gives a native collapsible with no callback and
         # no extra dependency. The Details/Summary wrapper lives HERE in the
         # static layout rather than inside _render_rule_eval's output: the
@@ -239,31 +255,20 @@ left_panel_top = html.Div(
         # the user's to keep.
         html.Details(
             id="rule-eval-accordion",
-            style={"marginTop": "8px"},
+            className="rule-eval",
             children=[
-                html.Summary("Rule evaluation", style={"cursor": "pointer", "fontWeight": "bold"}),
-                html.Div(id="rule-eval-panel"),
+                html.Summary("Rule evaluation", className="rule-eval-summary"),
+                html.Div(id="rule-eval-panel", className="rule-eval-body"),
             ],
         ),
     ],
 )
 
-left_panel = html.Div(
-    id="left-panel",
-    style={
-        "width": "360px",
-        "flex": "0 0 360px",
-        "display": "flex",
-        "flexDirection": "column",
-        "borderRight": "1px solid #ccc",
-        "minHeight": 0,
-    },
-    children=[left_panel_top],
-)
+left_panel = html.Div(id="left-panel", className="left-panel", children=[left_panel_top])
 
 # --- Center: map ----------------------------------------------------------
 
-map_panel = html.Div(id="map-panel", style={"flex": "1 1 auto", "minWidth": 0}, children=[build_map(SENSORS_META)])
+map_panel = html.Div(id="map-panel", className="map-panel", children=[build_map(SENSORS_META)])
 
 # --- Right panel ----------------------------------------------------------
 
@@ -271,26 +276,23 @@ DEFAULT_TARGET_SENSOR = UPSTREAM_SENSOR_ID if UPSTREAM_SENSOR_ID in SENSOR_IDS e
 
 injector_panel = html.Div(
     id="injector-placeholder",
-    style={
-        "padding": "8px",
-        "margin": "8px",
-    },
+    className="panel-card",
     children=[
         html.Div(
-            style={"display": "flex", "alignItems": "center", "gap": "6px"},
+            className="card-title-row",
             children=[
-                html.H4("Event injector"),
+                html.H4("Event injector", className="card-title"),
                 # title= renders as the browser's native tooltip on hover —
                 # no dbc dependency and no callback needed for what is
                 # purely explanatory text.
                 html.Span(
                     "ⓘ",
+                    className="info-hint",
                     title=(
                         "Overlays synthetic readings onto the stream assess_risk sees. "
                         "It never sets the risk state directly, and never touches the "
                         "underlying dataset — Reset always returns to a clean replay."
                     ),
-                    style={"cursor": "help", "color": "#b35900"},
                 ),
             ],
         ),
@@ -315,77 +317,76 @@ injector_panel = html.Div(
             ],
         ),
         html.Div(
-            style={"display": "flex", "gap": "8px", "marginTop": "8px"},
+            className="injector-actions",
             children=[
                 html.Button("Trigger event", id="injector-trigger-btn", className="btn btn-primary", n_clicks=0),
                 html.Button("Reset", id="injector-reset-btn", className="btn btn-secondary", n_clicks=0),
             ],
         ),
-        html.Div(id="injector-active-events-display", style={"marginTop": "8px"}),
+        html.Div(id="injector-active-events-display"),
     ],
 )
 
-def _legend_row(fill: str, label: str, ring_color: str | None = None, dashed: bool = False) -> html.Div:
-    """One legend entry. The swatch is _dot_style — the exact same circle the
-    sensor tabs draw — so the legend explains the tabs and the map pins with
-    one shared definition rather than a lookalike."""
-    swatch = dict(_dot_style(fill, ring_color, dashed, size="10px"), marginRight="6px")
+
+def _legend_item(fill: str, label: str, ring_color: str | None = None, dashed: bool = False) -> html.Div:
+    """One legend cell. The swatch is _dot_style — the exact same circle the
+    sensor tabs and the event log draw — so the legend explains all three
+    (plus the map pins) from one shared definition rather than a lookalike."""
     return html.Div(
-        style={"display": "flex", "alignItems": "center", "marginBottom": "2px"},
-        children=[html.Span(style=swatch), html.Span(label)],
+        className="legend-item",
+        children=[html.Span(className="legend-dot", style=_dot_style(fill, ring_color, dashed, size="9px")), html.Span(label)],
     )
 
 
 legend_panel = html.Div(
     id="status-legend",
-    style={"padding": "8px", "margin": "8px", "borderTop": "2px solid #999", "fontSize": "0.75em", "color": "#444"},
+    className="panel-card",
     children=[
-        html.Div("Legend", style={"fontWeight": "bold", "marginBottom": "3px"}),
-        # Severity rows come from constants.STAGES/SEVERITY_COLORS rather than
-        # a hardcoded list, so the legend can't drift from the palette the
-        # map and panels actually use.
-        *[_legend_row(SEVERITY_COLORS[stage], stage) for stage in STAGES],
-        # The two that aren't self-explanatory: a dashed ring means high water
-        # with no confirming upstream rain, so it is NOT escalated; a solid
-        # accent ring is the map's marker for whichever sensor the left panel
-        # is currently showing.
-        _legend_row(SEVERITY_COLORS["Watch"], "Possible fault", ring_color=FAULT_STROKE_COLOR, dashed=True),
-        _legend_row(SEVERITY_COLORS["Normal"], "Selected sensor", ring_color=SELECTED_RING_COLOR),
+        html.H4("Legend", className="card-title"),
+        # A grid rather than a stack: six one-line entries in a single column
+        # made this card taller than the log above it, for no gain — two
+        # columns halve its height and keep every label on one line.
+        html.Div(
+            className="legend-grid",
+            children=[
+                # Severity cells come from constants.STAGES/SEVERITY_COLORS rather
+                # than a hardcoded list, so the legend can't drift from the palette
+                # the map and panels actually use.
+                *[_legend_item(SEVERITY_COLORS[stage], stage) for stage in STAGES],
+                # The two that aren't self-explanatory: a dashed ring means high
+                # water with no confirming upstream rain, so it is NOT escalated;
+                # a solid accent ring is the map's marker for whichever sensor the
+                # left panel is currently showing.
+                _legend_item(SEVERITY_COLORS["Watch"], "Possible fault", ring_color=FAULT_STROKE_COLOR, dashed=True),
+                _legend_item(SEVERITY_COLORS["Normal"], "Selected", ring_color=SELECTED_RING_COLOR),
+            ],
+        ),
     ],
 )
 
 event_log_placeholder = html.Div(
     id="event-log-placeholder",
-    style={"padding": "8px", "margin": "8px", "borderTop": "2px solid #999"},
+    className="panel-card",
     children=[
-        html.H4("Event log"),
+        html.H4("Event log", className="card-title"),
         html.Div(id="event-log-content"),
     ],
 )
 
+# Injector (control) on top, then the log it drives, then the legend that
+# decodes both — most-interactive to most-static, top to bottom.
 right_panel = html.Div(
     id="right-panel",
-    style={
-        "width": "300px",
-        "flex": "0 0 300px",
-        "display": "flex",
-        "flexDirection": "column",
-        "minHeight": 0,
-        "overflowY": "auto",
-    },
-    children=[injector_panel, legend_panel, event_log_placeholder],
+    className="right-panel",
+    children=[injector_panel, event_log_placeholder, legend_panel],
 )
 
 # --- Assemble ----------------------------------------------------------
 
-body_row = html.Div(
-    id="body-row",
-    style={"display": "flex", "flex": "1 1 auto", "minHeight": 0},
-    children=[left_panel, map_panel, right_panel],
-)
+body_row = html.Div(id="body-row", className="body-row", children=[left_panel, map_panel, right_panel])
 
 app.layout = html.Div(
-    style={"display": "flex", "flexDirection": "column", "height": "100vh"},
+    className="app-shell",
     children=[
         top_bar,
         body_row,
@@ -588,16 +589,30 @@ app.clientside_callback(
     Output("selected-sensor-store", "data"),
     Input({"type": SENSOR_TAB_ID_TYPE, "index": ALL}, "n_clicks"),
     Input({"type": MARKER_ID_TYPE, "index": ALL}, "n_clicks"),
+    Input("injector-trigger-btn", "n_clicks"),
+    State("injector-scenario-select", "value"),
+    State("injector-target-sensor-select", "value"),
     prevent_initial_call=True,
 )
-def select_sensor(_tab_clicks, _marker_clicks):
+def select_sensor(_tab_clicks, _marker_clicks, _trigger_clicks, scenario, target_sensor):
     """selected-sensor-store is the single source of truth for "which sensor
     is the left panel showing", and this is the only callback that writes
-    it. Both entry points — a sensor tab and a map pin — are
+    it. The two user-driven entry points — a sensor tab and a map pin — are
     pattern-matching ids of the same shape, so whichever fired is read off
     ctx.triggered_id["index"] identically; there is no second control
     holding its own copy of the selection that could drift out of sync
     (which is what the old dropdown did whenever a pin was clicked).
+
+    Firing the injector also selects the sensor the scenario targets, so the
+    left panel is already showing the sensor the user is about to watch
+    react. Only the TRIGGER does this, not the target dropdown: changing the
+    dropdown is the user setting up a scenario, and yanking the charts
+    around mid-setup would fight them. The target-sensor value therefore
+    rides in as State, not Input.
+
+    "Catchment-wide event" has no single target (it hits all four at their
+    own lags), so it selects the upstream boundary gauge — the one the wave
+    reaches first, and thus the one worth watching from t=0.
 
     The n_clicks check is load-bearing, not defensive: update_risk_fanout
     rebuilds the marker LayerGroup's children EVERY tick (to recolor pins by
@@ -612,6 +627,8 @@ def select_sensor(_tab_clicks, _marker_clicks):
     guard covers them for free.)
     """
     triggered = ctx.triggered_id
+    if triggered == "injector-trigger-btn":
+        return target_sensor if scenario in SCENARIOS_NEEDING_TARGET else DEFAULT_TARGET_SENSOR
     if not isinstance(triggered, dict):
         return no_update
     clicked = ctx.triggered[0].get("value") if ctx.triggered else None
@@ -799,49 +816,80 @@ def _latest_soil_moisture(df, sensor_id):
 
 
 def _render_overall_risk(overall_state: str) -> html.Span:
-    color = SEVERITY_COLORS[overall_state]
-    text_color = "#fff"
+    """Only the fill is inline — it's the one genuinely dynamic bit. Padding,
+    radius and type live in .risk-chip."""
     return html.Span(
         f"Overall risk: {overall_state}",
-        style={
-            "backgroundColor": color,
-            "color": text_color,
-            "padding": "6px 12px",
-            "borderRadius": "6px",
-            "fontWeight": 500,
-            "fontSize": "0.95em"
-        },
+        className="risk-chip",
+        style={"backgroundColor": SEVERITY_COLORS[overall_state]},
+    )
+
+
+def _stat_box(value: str, label: str, primary: bool = False, value_style: dict | None = None, hint: str | None = None):
+    """One stat tile: big number over a small muted label.
+
+    `value_style` is the escape hatch for the only genuinely dynamic bit of
+    styling here — the water-level number's severity color, which
+    update_risk_fanout recomputes every tick. Everything else is class-driven.
+    """
+    box_class = "stat-box stat-box-primary" if primary else "stat-box"
+    return html.Div(
+        className=box_class,
+        title=hint,
+        children=[
+            html.Div(value, className="stat-value", style=value_style or {}),
+            html.Div(label, className="stat-label"),
+        ],
     )
 
 
 def _render_current_readings(sensor_assessment, rainfall_latest, soil_latest, soil_is_catchment) -> html.Div:
-    if sensor_assessment is None:
-        return html.Div([html.H4("Current readings"), html.Div("No data yet.")])
+    """Three tiles: water level (prominent, colored by its ČHMÚ stage),
+    rainfall, soil moisture. The em dash is the no-data value so the tiles
+    keep their shape rather than collapsing when a series is missing.
 
-    rows = [html.H4("Current readings")]
-    stage_color = SEVERITY_COLORS[sensor_assessment.threshold_state]
-    rows.append(
-        html.Div(
-            f"water_level: {sensor_assessment.latest_water_level:.1f} cm — {sensor_assessment.threshold_state}",
-            style={"color": stage_color, "fontWeight": "bold"},
-        )
+    Detail that used to be inline text — the rainfall "meaningful" flag and
+    the soil-moisture CATCHMENT fallback note — moves to the tile's `title`
+    tooltip. Both are qualifiers on a number, and at this size the number
+    has to stay the thing you read first.
+    """
+    if sensor_assessment is None:
+        return html.Div(className="stat-row", children=[_stat_box("—", "No data yet")])
+
+    water_level = _stat_box(
+        f"{sensor_assessment.latest_water_level:.1f}",
+        "Water level cm",
+        primary=True,
+        value_style={"color": SEVERITY_COLORS[sensor_assessment.threshold_state]},
+        hint=f"ČHMÚ stage: {sensor_assessment.threshold_state}",
     )
 
     if rainfall_latest is not None:
         _, rain_value = rainfall_latest
-        flag = " (meaningful)" if rain_value >= RAINFALL_CONFIRM_MM_H else ""
-        rows.append(html.Div(f"rainfall_intensity: {rain_value:.1f} mm/h{flag}"))
+        meaningful = rain_value >= RAINFALL_CONFIRM_MM_H
+        rainfall = _stat_box(
+            f"{rain_value:.1f}",
+            "Rainfall mm/h",
+            hint=(
+                f"≥ {RAINFALL_CONFIRM_MM_H:g} mm/h — meaningful upstream rain for confirmation"
+                if meaningful
+                else f"Below the {RAINFALL_CONFIRM_MM_H:g} mm/h confirmation threshold"
+            ),
+        )
     else:
-        rows.append(html.Div("rainfall_intensity: no data"))
+        rainfall = _stat_box("—", "Rainfall mm/h")
 
     if soil_latest is not None:
         _, soil_value = soil_latest
-        source = " (CATCHMENT)" if soil_is_catchment else ""
-        rows.append(html.Div(f"soil_moisture: {soil_value:.1f}%{source}"))
+        soil = _stat_box(
+            f"{soil_value:.1f}",
+            "Soil moisture %",
+            hint="Catchment-wide antecedent wetness" if soil_is_catchment else None,
+        )
     else:
-        rows.append(html.Div("soil_moisture: no data"))
+        soil = _stat_box("—", "Soil moisture %")
 
-    return html.Div(rows)
+    return html.Div(className="stat-row", children=[water_level, rainfall, soil])
 
 
 def _render_rule_eval(sensor_assessment) -> html.Div:
@@ -860,7 +908,7 @@ def _render_rule_eval(sensor_assessment) -> html.Div:
             html.Div(f"water_level ≥ Watch: {mark(conditions['water_level_watch_plus'])}"),
             html.Div(f"rising_fast: {mark(conditions['rising_fast'])}"),
             html.Div(f"upstream_rain_confirmed: {mark(conditions['upstream_rain_confirmed'])}"),
-            html.Div(html.B(f"→ {_verdict_label(sensor_assessment)}")),
+            html.Div(html.B(f"→ {_verdict_label(sensor_assessment)}"), className="rule-verdict"),
         ]
     )
 
@@ -873,7 +921,21 @@ def _sensor_category(sensor_assessment) -> str:
     return "normal"
 
 
-_CATEGORY_LABELS = {"confirmed_flood": "CONFIRMED FLOOD", "possible_fault": "POSSIBLE FAULT", "normal": "Normal"}
+_CATEGORY_LABELS = {"confirmed_flood": "Confirmed flood", "possible_fault": "Possible fault", "normal": "Normal"}
+
+
+def _log_dot_style(category: str, stage: str) -> dict:
+    """The leading type-icon for a log entry, drawn from the SAME _dot_style
+    the map pins, sensor tabs and legend use — so "amber dot" means the same
+    thing wherever it appears, and a possible_fault carries its dashed ring
+    here exactly as it does on the map. Confirmed floods take the severity
+    color of the stage that fired; a return to normal is always the Normal
+    green regardless of what it fell from."""
+    if category == "possible_fault":
+        return _dot_style(SEVERITY_COLORS.get(stage, NEUTRAL_PIN_COLOR), FAULT_STROKE_COLOR, dashed=True, size="7px")
+    if category == "confirmed_flood":
+        return _dot_style(SEVERITY_COLORS.get(stage, NEUTRAL_PIN_COLOR), size="7px")
+    return _dot_style(SEVERITY_COLORS["Normal"], size="7px")
 
 
 def _update_event_log(assessment, previous_categories: dict, log_entries: list) -> tuple[dict, list]:
@@ -881,7 +943,16 @@ def _update_event_log(assessment, previous_categories: dict, log_entries: list) 
     category (confirmed_flood/possible_fault/normal) actually changes from
     the previous tick, never on every tick. An empty `previous_categories`
     means no history yet (page load) — seed it silently rather than logging
-    every sensor's initial state as a fake "transition"."""
+    every sensor's initial state as a fake "transition".
+
+    Entries are stored as dicts, not preformatted strings: the renderer needs
+    the category and stage separately to pick the entry's dot color, and the
+    store is internal to this app so its shape is ours to choose. Only what
+    the entry displays is kept — when, which sensor, what it became. The
+    previous state is dropped (the line above it in the log already says
+    what it was) and so is the water_level value, which restated a number
+    the stat tiles and charts were already showing.
+    """
     current_categories = {sid: _sensor_category(sa) for sid, sa in assessment.sensors.items()}
     is_first_run = not previous_categories
     new_entries = list(log_entries)
@@ -892,8 +963,12 @@ def _update_event_log(assessment, previous_categories: dict, log_entries: list) 
             if previous is not None and previous != category:
                 sa = assessment.sensors[sensor_id]
                 new_entries.append(
-                    f"{sa.latest_timestamp} — {sensor_id}: {_CATEGORY_LABELS[previous]} -> "
-                    f"{_CATEGORY_LABELS[category]} (water_level={sa.latest_water_level:.1f} cm, {sa.threshold_state})"
+                    {
+                        "time": sa.latest_timestamp.strftime("%b %d · %H:%M"),
+                        "sensor": sensor_id,
+                        "category": category,
+                        "stage": sa.threshold_state,
+                    }
                 )
 
     return current_categories, new_entries[-MAX_LOG_ENTRIES:]
@@ -901,8 +976,22 @@ def _update_event_log(assessment, previous_categories: dict, log_entries: list) 
 
 def _render_event_log(log_entries: list) -> html.Div:
     if not log_entries:
-        return html.Div("No events yet.")
-    return html.Div([html.Div(entry) for entry in reversed(log_entries)])
+        return html.Div("No events yet.", className="log-empty")
+    return html.Div(
+        className="log-list",
+        children=[
+            html.Div(
+                className="log-entry",
+                children=[
+                    html.Span(className="log-dot", style=_log_dot_style(entry["category"], entry["stage"])),
+                    html.Span(entry["time"], className="log-time"),
+                    html.Span(entry["sensor"], className="log-sensor"),
+                    html.Span(_CATEGORY_LABELS[entry["category"]], className="log-state"),
+                ],
+            )
+            for entry in reversed(log_entries)
+        ],
+    )
 
 
 def _render_active_events(active_events: list, sim_step: int) -> html.Div:
