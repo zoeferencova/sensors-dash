@@ -44,7 +44,6 @@ from event_injector import (
     events_from_store,
     events_signature,
     events_to_store,
-    steps_remaining,
 )
 from replay import build_timeline, visible_readings
 from risk_assessment import RAINFALL_CONFIRM_MM_H, assess_risk
@@ -52,6 +51,7 @@ from sensor_map import (
     FAULT_STROKE_COLOR,
     MARKER_ID_TYPE,
     MARKER_LAYER_ID,
+    REACH_LINE_COLOR,
     SELECTED_RING_COLOR,
     build_map,
     build_markers,
@@ -287,12 +287,25 @@ top_bar = html.Div(
 
 # --- Left panel ---------------------------------------------------------
 
+# Grouped into .left-section blocks rather than one flat run of children.
+# Each block owns its own vertical padding and a hairline top rule, which is
+# what gives the panel its rhythm: the reader sees four things (which sensor,
+# what it reads now, its history, why the verdict) instead of one dense
+# column. The sections carry the spacing so the headings themselves keep the
+# type they already had.
 left_panel_top = html.Div(
     id="left-panel-top",
     className="left-panel-top",
     children=[
-        html.Div("Sensor Status", className="section-label"),
-        html.Div(id="sensor-tabs", className="sensor-tabs", children=build_sensor_tabs(DEFAULT_SENSOR)),
+        # Secondary: the tab strip is a selector with a status dot on it, not
+        # a readout to study — it stays the quietest block on the panel.
+        html.Div(
+            className="left-section",
+            children=[
+                html.Div("Sensor Status", className="section-label"),
+                html.Div(id="sensor-tabs", className="sensor-tabs", children=build_sensor_tabs(DEFAULT_SENSOR)),
+            ],
+        ),
         # Readings sit ABOVE the charts: they're the "what is it right now"
         # answer, and the charts are the supporting history. The panel's own
         # children are rendered per tick by update_risk_fanout.
@@ -300,8 +313,13 @@ left_panel_top = html.Div(
         # Sub-headings inside a section use the same small label the form
         # controls do ("Scenario", "Target sensor"), so the left panel has
         # the same two-level heading hierarchy as the right one.
-        html.Div("Current readings", className="field-label sub-label"),
-        html.Div(id="current-readings-panel"),
+        html.Div(
+            className="left-section",
+            children=[
+                html.Div("Current readings", className="field-label sub-label"),
+                html.Div(id="current-readings-panel"),
+            ],
+        ),
         # A real (if empty) Figure rather than {} — Plotly.js otherwise logs
         # a harmless but noisy "doesn't yet have a plot" warning on first
         # paint, before update_charts's initial call replaces it moments
@@ -315,10 +333,18 @@ left_panel_top = html.Div(
         # charts.py still builds structure-only figures and a resize stays
         # layout-only (Plotly.Plots.resize) — the extendData append path is
         # untouched.
-        html.Div(className="chart-slot", children=dcc.Graph(id="water-level-graph", responsive=True, figure=go.Figure())),
         html.Div(
-            className="chart-slot chart-slot-short",
-            children=dcc.Graph(id="rainfall-graph", responsive=True, figure=go.Figure()),
+            className="left-section",
+            children=[
+                html.Div(
+                    className="chart-slot",
+                    children=dcc.Graph(id="water-level-graph", responsive=True, figure=go.Figure()),
+                ),
+                html.Div(
+                    className="chart-slot chart-slot-short",
+                    children=dcc.Graph(id="rainfall-graph", responsive=True, figure=go.Figure()),
+                ),
+            ],
         ),
         # <details>/<summary> gives a native collapsible with no callback and
         # no extra dependency. The Details/Summary wrapper lives HERE in the
@@ -328,17 +354,20 @@ left_panel_top = html.Div(
         # open/closed state and the panel would snap shut once per tick.
         # Only the inner Div's children change, so the disclosure state is
         # the user's to keep.
-        html.Details(
-            id="rule-eval-accordion",
-            className="rule-eval",
-            # Open by default — it's the panel that shows WHY the system
-            # reached its verdict, which is the point of the whole rule
-            # engine; hiding it behind a click undersells it.
-            open=True,
-            children=[
-                html.Summary("Rule evaluation", className="field-label sub-label rule-eval-summary"),
-                html.Div(id="rule-eval-panel", className="rule-eval-body"),
-            ],
+        html.Div(
+            className="left-section",
+            children=html.Details(
+                id="rule-eval-accordion",
+                className="rule-eval",
+                # Open by default — it's the panel that shows WHY the system
+                # reached its verdict, which is the point of the whole rule
+                # engine; hiding it behind a click undersells it.
+                open=True,
+                children=[
+                    html.Summary("Rule evaluation", className="field-label sub-label rule-eval-summary"),
+                    html.Div(id="rule-eval-panel", className="rule-eval-body"),
+                ],
+            ),
         ),
     ],
 )
@@ -402,7 +431,10 @@ injector_panel = html.Div(
                 html.Button("Reset", id="injector-reset-btn", className="btn btn-secondary", n_clicks=0),
             ],
         ),
-        html.Div(id="injector-active-events-display"),
+        # No per-event status readout here: what was injected and what it did
+        # is exactly what the event log below already reports, and a
+        # "retained until Reset" note raised more questions than it answered.
+        # The top bar still carries the one-line "N injected event(s)" count.
     ],
 )
 
@@ -414,6 +446,18 @@ def _legend_item(fill: str, label: str, ring_color: str | None = None, dashed: b
     return html.Div(
         className="legend-item",
         children=[html.Span(className="legend-dot", style=_dot_style(fill, ring_color, dashed, size="9px")), html.Span(label)],
+    )
+
+
+def _legend_line_item(color: str, label: str) -> html.Div:
+    """A legend cell for something drawn as a LINE rather than a point. Only
+    the reach polyline qualifies, and a dot swatch would misdescribe it — the
+    swatch has to have the shape of the thing it stands for. Geometry is in
+    .legend-line; the colour stays inline for the same reason the dots' does,
+    so it can only ever come from the map's own constant."""
+    return html.Div(
+        className="legend-item",
+        children=[html.Span(className="legend-line", style={"backgroundColor": color}), html.Span(label)],
     )
 
 
@@ -438,6 +482,9 @@ legend_panel = html.Div(
                 # left panel is currently showing.
                 _legend_item(SEVERITY_COLORS["Watch"], "Possible fault", ring_color=FAULT_STROKE_COLOR, dashed=True),
                 _legend_item(SEVERITY_COLORS["Normal"], "Selected", ring_color=SELECTED_RING_COLOR),
+                # The only non-pin thing on the map, and the one map feature
+                # nothing else on the page explained.
+                _legend_line_item(REACH_LINE_COLOR, "Botič reach"),
             ],
         ),
     ],
@@ -990,7 +1037,23 @@ def _render_current_readings(sensor_assessment, rainfall_latest, soil_latest, so
         soil = _stat_box(
             f"{soil_value:.1f}",
             "Soil moisture %",
-            hint="Catchment-wide antecedent wetness" if soil_is_catchment else None,
+            # Spelled out because the tile looks per-sensor and isn't: the
+            # single CATCHMENT series is the most common thing to misread on
+            # this panel ("why didn't it change when I switched sensors?").
+            #
+            # Strictly conditional on the data actually being catchment-wide.
+            # On the old per-sensor shape the value DOES change per sensor,
+            # so the shared-value wording would be a plain falsehood — that
+            # branch gets its own honest text instead. Which one you see is
+            # therefore a live readout of which data shape is loaded.
+            hint=(
+                "Wetness of the upstream catchment feeding the monitored reach; "
+                "shared across all sensors — this is why it doesn't change when "
+                "switching sensors."
+                if soil_is_catchment
+                else "Antecedent wetness reported for this sensor. This dataset still "
+                "carries soil moisture per sensor rather than as one catchment-wide series."
+            ),
         )
     else:
         soil = _stat_box("—", "Soil moisture %")
@@ -998,19 +1061,31 @@ def _render_current_readings(sensor_assessment, rainfall_latest, soil_latest, so
     return html.Div(className="stat-row", children=[water_level, rainfall, soil])
 
 
-def _condition_row(label: str, met: bool) -> html.Div:
-    """One rule condition as a labelled state pill instead of a ✓/✗ glyph.
+def _condition_row(label: str, met: bool, hint: str) -> html.Div:
+    """One rule condition: a small mark, then a plain-language name.
 
-    Filled (steel) reads as "this fired", outlined as "it didn't" — the same
-    filled-vs-outlined distinction the map already uses for a confirmed pin
-    versus a dashed unconfirmed one, so the two panels agree on what
-    "asserted" looks like.
+    The marks are deliberately lopsided in weight — a green check for a
+    condition that fired, a plain grey dot for one that didn't. Only the
+    fired ones are news, and the previous full-width YES/NO pills gave the
+    "no" rows exactly as much visual weight as the "yes" rows, which is what
+    made a panel of mostly-inactive conditions read as loud.
+
+    Labels are short English rather than the source's snake_case condition
+    keys. CLAUDE.md's rule-panel spec named them in snake_case so the panel
+    could be read against the rules, but that only helps a reader who
+    already knows the rules; the exact rule (threshold, rate, window) now
+    lives in each item's `hint` tooltip instead, so the precision is kept
+    without putting identifiers in front of someone who doesn't want them.
     """
     return html.Div(
-        className="rule-row",
+        className="rule-cond",
+        title=hint,
         children=[
-            html.Span(label, className="rule-label"),
-            html.Span("yes" if met else "no", className=f"rule-pill rule-pill-{'on' if met else 'off'}"),
+            html.Span(
+                "✓" if met else "•",
+                className=f"rule-mark rule-mark-{'on' if met else 'off'}",
+            ),
+            html.Span(label, className="rule-label rule-label-hint"),
         ],
     )
 
@@ -1032,9 +1107,28 @@ def _render_rule_eval(sensor_assessment) -> html.Div:
 
     return html.Div(
         [
-            _condition_row("water_level ≥ Watch", conditions["water_level_watch_plus"]),
-            _condition_row("rising_fast", conditions["rising_fast"]),
-            _condition_row("upstream_rain_confirmed", conditions["upstream_rain_confirmed"]),
+            # All three on one line: they're a single verdict's inputs, and
+            # stacking them made three short facts occupy a whole block.
+            html.Div(
+                className="rule-conditions",
+                children=[
+                    _condition_row(
+                        "High water",
+                        conditions["water_level_watch_plus"],
+                        hint="Water level at or above the 120 cm Watch threshold (ČHMÚ 1st SPA)",
+                    ),
+                    _condition_row(
+                        "Rising fast",
+                        conditions["rising_fast"],
+                        hint="Water level rising faster than 0.5 cm/min",
+                    ),
+                    _condition_row(
+                        "Upstream rain",
+                        conditions["upstream_rain_confirmed"],
+                        hint="Rainfall detected upstream within the expected travel-time window",
+                    ),
+                ],
+            ),
             html.Div(
                 className="rule-verdict",
                 children=[
@@ -1130,25 +1224,6 @@ def _render_event_log(log_entries: list) -> html.Div:
     )
 
 
-def _render_active_events(active_events: list, sim_step: int) -> html.Div:
-    """The injector panel's status readout. Steps-remaining counts down as
-    sim_step advances since this re-renders every tick; once it hits zero
-    the event has finished unfolding but is still retained (its spike stays
-    in the chart history), so the readout says so rather than sitting on a
-    misleading "0 steps left" forever."""
-    if not active_events:
-        return html.Div("Status: no simulated events active", className="injector-status")
-    rows = []
-    for event in active_events:
-        label = event.scenario
-        if event.target_sensor:
-            label += f" @ {event.target_sensor}"
-        remaining = steps_remaining(event, sim_step)
-        state = f"{remaining} steps left" if remaining else "complete — retained until Reset"
-        rows.append(html.Div(f"{label} — magnitude {event.magnitude:g}, {state}", className="injector-status"))
-    return html.Div(rows)
-
-
 def _render_top_bar_injector_slot(active_events: list) -> str:
     if not active_events:
         return ""
@@ -1171,7 +1246,6 @@ def _render_top_bar_injector_slot(active_events: list) -> str:
     Output("event-log-store", "data"),
     Output("sensor-status-store", "data"),
     Output("last-assessed-step-store", "data"),
-    Output("injector-active-events-display", "children"),
     Output("top-bar-injector-slot", "children"),
     Input("sim-step-store", "data"),
     Input("selected-sensor-store", "data"),
@@ -1270,7 +1344,6 @@ def update_risk_fanout(
     new_categories, new_log_entries = _update_event_log(assessment, categories, entries)
     event_log_display = _render_event_log(new_log_entries)
 
-    active_events_display = _render_active_events(active_events, sim_step)
     top_bar_injector_slot = _render_top_bar_injector_slot(active_events)
 
     return (
@@ -1284,7 +1357,6 @@ def update_risk_fanout(
         new_log_entries,
         new_categories,
         sim_step,
-        active_events_display,
         top_bar_injector_slot,
     )
 

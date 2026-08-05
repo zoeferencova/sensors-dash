@@ -3,7 +3,7 @@
   "configurations": [
     {
       "name": "sensors-dash",
-      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeExecutable": ".venv/bin/python",
       "runtimeArgs": ["app/main.py"],
       "port": 8060
     }

@@ -76,7 +76,10 @@ def _base_layout(title: str) -> dict:
             xanchor="left",
             y=-0.16,
             yanchor="top",
-            font=dict(size=11, color=AXIS_COLOR),
+            # A step smaller than the tick labels: the threshold legend is a
+            # key you consult, not a reading, and it sat level with the data
+            # labels while competing with them for attention.
+            font=dict(size=10, color=AXIS_COLOR),
             # The legend here is a key, not a control: clicking an entry
             # would hide a threshold line or the injected-event markers,
             # which is never something the user wants mid-replay.
