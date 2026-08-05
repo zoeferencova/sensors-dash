@@ -303,12 +303,22 @@
 }
 
 .stat-box {
+    position: relative;   /* anchors .stat-info-hint to this tile's corner */
     flex: 1 1 0;
     min-width: 0;
     padding: 8px 10px;
     background-color: var(--surface-sunk);
     border: none;
     border-radius: 6px;
+}
+
+/* Pinned to the tile's corner rather than sitting beside the label text, so
+   it signals "hover the tile" without disturbing the label itself. */
+.stat-info-hint {
+    position: absolute;
+    top: 4px;
+    right: 6px;
+    font-size: 11px;
 }
 
 .stat-value {
@@ -357,42 +367,77 @@
     margin-top: 4px;
 }
 
-/* list-item, not .field-label's block, so the disclosure triangle survives. */
+/* list-item, not .field-label's block, so the disclosure triangle survives.
+   Sizing/weight/colour come from .section-label — same heading as "Sensor
+   Status" and the chart titles above it, rather than the smaller field
+   label it used before, so the panel doesn't read as a lesser afterthought
+   under the charts. */
 .rule-eval-summary {
     display: list-item;
     cursor: pointer;
-    margin-bottom: 4px;
+    margin-bottom: 10px;
 }
 
 .rule-eval-body {
-    margin-top: 2px;
+    margin-top: 4px;
 }
 
-/* All three conditions on ONE line. They're the three inputs to a single
-   verdict, so they read as one statement; wrap is the fallback for a
-   narrower panel rather than the intent. */
+/* Three conditions stacked vertically — they're read one at a time, not as
+   a single run-on line, and stacking is what makes each one's met/unmet
+   state easy to scan straight down. */
 .rule-conditions {
     display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 4px 14px;
+    flex-direction: column;
+    gap: 9px;
 }
 
-/* One condition: a small mark, then its plain-language name. */
+/* One condition: an indicator dot, then its plain-language name. */
 .rule-cond {
     display: flex;
     align-items: center;
-    gap: 5px;
-    padding: 2px 0;
-    font-size: 11px;
-    color: var(--ink-muted);
+    gap: 8px;
+    font-size: 12px;
 }
 
-.rule-label {
+/* The core legibility fix: met and unmet are opposite in weight, not just
+   different in glyph. A met condition's dot is FILLED in the accent colour
+   and its label sits at full ink strength — it reads as "lit up". An unmet
+   condition's dot is HOLLOW (ring only) and its label fades to
+   --ink-faint — it recedes instead of competing for attention. Deliberately
+   soft dots rather than a green check / red X: that pairing reads as a
+   form-validation error state and clashes with the muted palette used
+   everywhere else on the dashboard. */
+.rule-dot {
+    flex: 0 0 auto;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    box-sizing: border-box;
+}
+
+.rule-dot-on {
+    background-color: var(--steel);
+    border: 2px solid var(--steel);
+}
+
+.rule-dot-off {
+    background-color: transparent;
+    border: 2px solid #d4dce3;
+}
+
+.rule-cond-label {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.rule-cond-label-on {
+    color: var(--ink);
+}
+
+.rule-cond-label-off {
+    color: var(--ink-faint);
 }
 
 /* Marks the two conditions that carry a title tooltip, so it's discoverable
@@ -403,34 +448,14 @@
     text-underline-offset: 2px;
 }
 
-/* Fixed width so the labels align whichever mark is drawn. */
-.rule-mark {
-    flex: 0 0 auto;
-    width: 10px;
-    text-align: center;
-    font-size: 10px;
-    line-height: 1;
-}
-
-/* Only the fired conditions get colour — an unfired one is a plain grey dot,
-   not a second thing shouting for attention. Green is the palette's own
-   "Normal" sage, so the panel introduces no new hue. */
-.rule-mark-on {
-    color: #7A9B76;
-    font-size: 11px;
-    font-weight: 600;
-}
-
-.rule-mark-off {
-    color: #c2c8ce;
-}
-
+/* Set off from the conditions above by its own rule and spacing — the
+   conclusion, not a fourth input. */
 .rule-verdict {
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-top: 8px;
-    padding-top: 9px;
+    margin-top: 10px;
+    padding-top: 10px;
     border-top: 1px solid var(--line-faint);
 }
 

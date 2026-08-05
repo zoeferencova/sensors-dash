@@ -364,7 +364,7 @@ left_panel_top = html.Div(
                 # engine; hiding it behind a click undersells it.
                 open=True,
                 children=[
-                    html.Summary("Rule evaluation", className="field-label sub-label rule-eval-summary"),
+                    html.Summary("Rule evaluation", className="section-label rule-eval-summary"),
                     html.Div(id="rule-eval-panel", className="rule-eval-body"),
                 ],
             ),
@@ -979,7 +979,7 @@ def _render_overall_risk(overall_state: str) -> html.Span:
     )
 
 
-def _stat_box(value: str, label: str, hint: str | None = None):
+def _stat_box(value: str, label: str, hint: str | None = None, show_hint_icon: bool = False):
     """One stat tile: a number over a small muted label.
 
     All three tiles are identical — no emphasised variant and no severity
@@ -987,14 +987,25 @@ def _stat_box(value: str, label: str, hint: str | None = None):
     threshold lines on the chart below, the status dots, and the map; a
     fourth encoding of it here only added weight to a panel that needed
     less. Separation is whitespace, not borders.
+
+    `title=hint` puts the tooltip on the whole tile either way, but a bare
+    tile gives no visual cue that hovering does anything. `show_hint_icon`
+    adds the same small "ⓘ" the event injector uses, pinned to the tile's
+    top-right corner — for the one tile (soil moisture) where the tooltip
+    corrects a real misreading rather than just adding detail, so it's worth
+    signalling, unlike the other two tiles' hints. Top-right rather than
+    beside the label keeps the label's own text undisturbed.
     """
+    children = [
+        html.Div(value, className="stat-value"),
+        html.Div(label, className="stat-label"),
+    ]
+    if show_hint_icon:
+        children.append(html.Span("ⓘ", className="info-hint stat-info-hint"))
     return html.Div(
         className="stat-box",
         title=hint,
-        children=[
-            html.Div(value, className="stat-value"),
-            html.Div(label, className="stat-label"),
-        ],
+        children=children,
     )
 
 
@@ -1054,6 +1065,7 @@ def _render_current_readings(sensor_assessment, rainfall_latest, soil_latest, so
                 else "Antecedent wetness reported for this sensor. This dataset still "
                 "carries soil moisture per sensor rather than as one catchment-wide series."
             ),
+            show_hint_icon=True,
         )
     else:
         soil = _stat_box("—", "Soil moisture %")
@@ -1061,31 +1073,33 @@ def _render_current_readings(sensor_assessment, rainfall_latest, soil_latest, so
     return html.Div(className="stat-row", children=[water_level, rainfall, soil])
 
 
-def _condition_row(label: str, met: bool, hint: str) -> html.Div:
-    """One rule condition: a small mark, then a plain-language name.
+def _condition_row(label: str, met: bool, hint: str | None = None) -> html.Div:
+    """One rule condition, stacked: an indicator dot, then a plain-language
+    name.
 
-    The marks are deliberately lopsided in weight — a green check for a
-    condition that fired, a plain grey dot for one that didn't. Only the
-    fired ones are news, and the previous full-width YES/NO pills gave the
-    "no" rows exactly as much visual weight as the "yes" rows, which is what
-    made a panel of mostly-inactive conditions read as loud.
+    The whole point of this panel is that met/unmet has to be legible at a
+    glance, so the two states are opposite in weight rather than merely
+    different in glyph:
+      met     — dot FILLED in the steel accent, label in full-strength ink.
+      not met — dot HOLLOW (ring only, no fill), label in faint muted grey.
+    A met condition reads as "lit up"; an unmet one recedes rather than
+    competing with it. Deliberately soft (no green check / red X) — that
+    form-validation vocabulary reads as an error state and doesn't sit with
+    the muted palette used everywhere else on the dashboard.
 
     Labels are short English rather than the source's snake_case condition
-    keys. CLAUDE.md's rule-panel spec named them in snake_case so the panel
-    could be read against the rules, but that only helps a reader who
-    already knows the rules; the exact rule (threshold, rate, window) now
-    lives in each item's `hint` tooltip instead, so the precision is kept
-    without putting identifiers in front of someone who doesn't want them.
+    keys (CLAUDE.md's rule-panel spec names them that way so the panel reads
+    against the rules) — that only helps a reader who already knows the
+    rules. The exact rule lives in `hint`'s tooltip instead, so precision
+    isn't lost, just moved out of the way of someone who doesn't want it.
     """
+    state = "on" if met else "off"
     return html.Div(
         className="rule-cond",
         title=hint,
         children=[
-            html.Span(
-                "✓" if met else "•",
-                className=f"rule-mark rule-mark-{'on' if met else 'off'}",
-            ),
-            html.Span(label, className="rule-label rule-label-hint"),
+            html.Span(className=f"rule-dot rule-dot-{state}"),
+            html.Span(label, className=f"rule-cond-label rule-cond-label-{state}" + (" rule-label-hint" if hint else "")),
         ],
     )
 
@@ -1094,11 +1108,10 @@ def _render_rule_eval(sensor_assessment) -> html.Div:
     """Body only — the "Rule evaluation" heading is the accordion's
     <summary> in the static layout, so it must not be repeated here.
 
-    Condition names stay in the source's own snake_case (CLAUDE.md's
-    rule-panel spec names them that way, and so does assess_risk's
-    `conditions` dict) — the point of this panel is that you can read it
-    against the rules, so prettifying the identifiers would cost more than
-    it gains.
+    Three conditions stacked vertically (inputs), then the verdict set off
+    below by a rule and its own spacing (output) — the panel visually
+    separates "what was checked" from "what it concluded" rather than
+    running them together.
     """
     if sensor_assessment is None:
         return html.Div("No data yet.", className="rule-empty")
@@ -1107,15 +1120,12 @@ def _render_rule_eval(sensor_assessment) -> html.Div:
 
     return html.Div(
         [
-            # All three on one line: they're a single verdict's inputs, and
-            # stacking them made three short facts occupy a whole block.
             html.Div(
                 className="rule-conditions",
                 children=[
                     _condition_row(
                         "High water",
                         conditions["water_level_watch_plus"],
-                        hint="Water level at or above the 120 cm Watch threshold (ČHMÚ 1st SPA)",
                     ),
                     _condition_row(
                         "Rising fast",
@@ -1134,7 +1144,9 @@ def _render_rule_eval(sensor_assessment) -> html.Div:
                 children=[
                     # Same dot vocabulary as the tabs, status row, map pins and
                     # log — a dashed ring here means possible_fault exactly as
-                    # it does everywhere else.
+                    # it does everywhere else. This is the one dot in the
+                    # panel that stays severity-coloured, since it's the
+                    # output, not one of the lit/dim inputs above it.
                     html.Span(className="rule-verdict-dot", style=_status_dot_style(sensor_assessment, size="8px")),
                     html.Span(_verdict_label(sensor_assessment), className="rule-verdict-text"),
                 ],
