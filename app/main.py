@@ -5,8 +5,8 @@ sensor charts, and the structural layout. Step 4 (CLAUDE.md "The alert /
 nowcasting logic") wires the already-ported `risk_assessment.assess_risk`
 into that layout: one callback (`update_risk_fanout`) runs it once per tick
 and fans the single result out to the map pins, the top-bar overall state,
-the current-readings and rule-evaluation panels, the all-sensor summary,
-and the event log. Nothing downstream recomputes risk itself — they only
+the current-readings and rule-evaluation panels, the sensor tabs' status
+dots, and the event log. Nothing downstream recomputes risk itself — they only
 read fields off the `RiskAssessment`/`SensorAssessment` that callback
 produces.
 
@@ -31,7 +31,7 @@ import plotly.graph_objects as go
 from dash import ALL, Dash, Input, Output, State, ctx, dcc, html, no_update
 
 import charts
-from constants import SEVERITY_COLORS, STAGES
+from constants import NEUTRAL_PIN_COLOR, SEVERITY_COLORS, STAGES
 from data_loader import clean_readings, get_series, latest_value, load_long, load_sensors
 from event_injector import (
     DEFAULT_MAGNITUDE,
@@ -47,7 +47,14 @@ from event_injector import (
 )
 from replay import build_timeline, visible_readings
 from risk_assessment import RAINFALL_CONFIRM_MM_H, assess_risk
-from sensor_map import FAULT_STROKE_COLOR, MARKER_ID_TYPE, MARKER_LAYER_ID, build_map, build_markers
+from sensor_map import (
+    FAULT_STROKE_COLOR,
+    MARKER_ID_TYPE,
+    MARKER_LAYER_ID,
+    SELECTED_RING_COLOR,
+    build_map,
+    build_markers,
+)
 
 READINGS = clean_readings(load_long())
 SENSORS_META = load_sensors()
@@ -80,6 +87,80 @@ def chart_x_range(sim_step: int) -> list[str]:
     """
     now = TIMELINE[max(0, min(sim_step, len(TIMELINE) - 1))]
     return [(now - CHART_WINDOW).isoformat(), now.isoformat()]
+
+
+# --- Sensor status dots + selectable sensor tabs --------------------------
+
+SENSOR_TAB_ID_TYPE = "sensor-tab"
+SENSOR_TAB_DOT_ID_TYPE = "sensor-tab-dot"
+
+
+def _dot_style(fill: str, ring_color: str | None = None, dashed: bool = False, size: str = "9px") -> dict:
+    """One status dot, drawn the way the map draws the matching pin: filled
+    by severity, ringed in its own fill color for an ordinary reading and in
+    a dashed FAULT_STROKE_COLOR for a possible_fault.
+
+    content-box sizing means the fill keeps the same diameter whichever ring
+    is drawn, so a row of dots doesn't jitter as statuses change under it.
+    """
+    return {
+        "display": "inline-block",
+        "width": size,
+        "height": size,
+        "borderRadius": "50%",
+        "backgroundColor": fill,
+        "flex": "0 0 auto",
+        "border": f"2px {'dashed' if dashed else 'solid'} {ring_color or fill}",
+        "boxSizing": "content-box",
+    }
+
+
+def _status_dot_style(sensor_assessment) -> dict:
+    """The dot for one sensor, derived from its assessment by the same
+    fill/ring rules sensor_map._marker_style applies to that sensor's pin —
+    so a tab and its map pin can never disagree about what a sensor is
+    doing. No assessment yet falls back to the same neutral color the map
+    uses before the first fanout."""
+    if sensor_assessment is None:
+        return _dot_style(NEUTRAL_PIN_COLOR)
+    if sensor_assessment.possible_fault:
+        return _dot_style(SEVERITY_COLORS[sensor_assessment.threshold_state], FAULT_STROKE_COLOR, dashed=True)
+    return _dot_style(SEVERITY_COLORS[sensor_assessment.effective_state])
+
+
+def _tab_class(sensor_id: str, selected_sensor: str) -> str:
+    return "sensor-tab sensor-tab-selected" if sensor_id == selected_sensor else "sensor-tab"
+
+
+def build_sensor_tabs(selected_sensor: str) -> list[html.Button]:
+    """The four sensor tabs — status display AND sensor selector in one
+    control (they replaced both the old dropdown and the separate
+    all-sensor-status panel).
+
+    Built ONCE into the static layout and never re-created: a tick only
+    rewrites the dots' `style` and the buttons' `className` (see
+    update_risk_fanout). Keeping the Button components themselves in place
+    is what lets their n_clicks counters accumulate normally — a per-tick
+    rebuild would reset n_clicks and make every tick look like a click on
+    the first tab, which is exactly the trap the map's markers need a guard
+    for in select_sensor.
+    """
+    return [
+        html.Button(
+            id={"type": SENSOR_TAB_ID_TYPE, "index": sensor["sensor_id"]},
+            className=_tab_class(sensor["sensor_id"], selected_sensor),
+            title=f"{sensor['sensor_id']} — {sensor['name']}",
+            n_clicks=0,
+            children=[
+                html.Span(
+                    id={"type": SENSOR_TAB_DOT_ID_TYPE, "index": sensor["sensor_id"]},
+                    style=_dot_style(NEUTRAL_PIN_COLOR),
+                ),
+                html.Span(sensor["sensor_id"]),
+            ],
+        )
+        for sensor in SENSORS_META
+    ]
 
 
 SPEED_OPTIONS = [
@@ -139,13 +220,8 @@ left_panel_top = html.Div(
     id="left-panel-top",
     style={"flex": "1 1 auto", "overflowY": "auto", "padding": "8px"},
     children=[
-        html.Label("Sensor", className="field-label"),
-        dcc.Dropdown(
-            id="sensor-selector",
-            options=[{"label": f"{s['sensor_id']} — {s['name']}", "value": s["sensor_id"]} for s in SENSORS_META],
-            value=DEFAULT_SENSOR,
-            clearable=False,
-        ),
+        html.H4("Sensor Status", style={"marginTop": "4px"}),
+        html.Div(id="sensor-tabs", className="sensor-tabs", children=build_sensor_tabs(DEFAULT_SENSOR)),
         # A real (if empty) Figure rather than {} — Plotly.js otherwise logs
         # a harmless but noisy "doesn't yet have a plot" warning on first
         # paint, before update_charts's initial call replaces it moments
@@ -249,57 +325,32 @@ injector_panel = html.Div(
     ],
 )
 
-def _legend_swatch(fill: str, dashed_ring: bool = False) -> html.Span:
-    """A small circle matching how the map draws its pins: filled by
-    severity, and for possible_fault the same dashed black ring
-    sensor_map._marker_style applies."""
-    style = {
-        "display": "inline-block",
-        "width": "10px",
-        "height": "10px",
-        "borderRadius": "50%",
-        "backgroundColor": fill,
-        "marginRight": "6px",
-        "flex": "0 0 auto",
-        "border": f"2px {'dashed' if dashed_ring else 'solid'} {FAULT_STROKE_COLOR if dashed_ring else fill}",
-        "boxSizing": "content-box",
-    }
-    return html.Span(style=style)
-
-
-def _legend_row(fill: str, label: str, dashed_ring: bool = False) -> html.Div:
+def _legend_row(fill: str, label: str, ring_color: str | None = None, dashed: bool = False) -> html.Div:
+    """One legend entry. The swatch is _dot_style — the exact same circle the
+    sensor tabs draw — so the legend explains the tabs and the map pins with
+    one shared definition rather than a lookalike."""
+    swatch = dict(_dot_style(fill, ring_color, dashed, size="10px"), marginRight="6px")
     return html.Div(
         style={"display": "flex", "alignItems": "center", "marginBottom": "2px"},
-        children=[_legend_swatch(fill, dashed_ring), html.Span(label)],
+        children=[html.Span(style=swatch), html.Span(label)],
     )
 
 
-status_legend = html.Div(
+legend_panel = html.Div(
     id="status-legend",
-    style={"fontSize": "0.75em", "color": "#444", "marginTop": "8px"},
+    style={"padding": "8px", "margin": "8px", "borderTop": "2px solid #999", "fontSize": "0.75em", "color": "#444"},
     children=[
         html.Div("Legend", style={"fontWeight": "bold", "marginBottom": "3px"}),
         # Severity rows come from constants.STAGES/SEVERITY_COLORS rather than
         # a hardcoded list, so the legend can't drift from the palette the
         # map and panels actually use.
         *[_legend_row(SEVERITY_COLORS[stage], stage) for stage in STAGES],
-        # The one that isn't self-explanatory: a dashed ring means high water
-        # with no confirming upstream rain, so it is NOT escalated.
-        _legend_row(
-            SEVERITY_COLORS["Watch"],
-            "Possible fault",
-            dashed_ring=True,
-        ),
-    ],
-)
-
-all_sensor_status_panel = html.Div(
-    id="all-sensor-status-section",
-    style={"padding": "8px", "margin": "8px", "borderTop": "2px solid #999"},
-    children=[
-        html.H4("All-sensor status"),
-        html.Div(id="all-sensor-status-panel"),
-        status_legend,
+        # The two that aren't self-explanatory: a dashed ring means high water
+        # with no confirming upstream rain, so it is NOT escalated; a solid
+        # accent ring is the map's marker for whichever sensor the left panel
+        # is currently showing.
+        _legend_row(SEVERITY_COLORS["Watch"], "Possible fault", ring_color=FAULT_STROKE_COLOR, dashed=True),
+        _legend_row(SEVERITY_COLORS["Normal"], "Selected sensor", ring_color=SELECTED_RING_COLOR),
     ],
 )
 
@@ -322,7 +373,7 @@ right_panel = html.Div(
         "minHeight": 0,
         "overflowY": "auto",
     },
-    children=[injector_panel, all_sensor_status_panel, event_log_placeholder],
+    children=[injector_panel, legend_panel, event_log_placeholder],
 )
 
 # --- Assemble ----------------------------------------------------------
@@ -408,9 +459,9 @@ def advance_replay(
     Dash requires exactly one callback per Output and both are now touched
     from more than one control (the tick itself, Play/Pause, Trigger,
     Reset) — branches on ctx.triggered_id. sim_step is a pure function of
-    n_intervals (clamped to the last timestep) and is recomputed the same
-    way regardless of which Input fired, since Trigger needs "now" as the
-    new event's trigger_step.
+    n_intervals (modulo the timeline length, so playback loops) and is
+    recomputed the same way regardless of which Input fired, since Trigger
+    needs "now" as the new event's trigger_step.
 
     Also emits the charts' sliding x-axis window, for one specific reason:
     the window has to reach the client in a DIFFERENT response than the
@@ -418,7 +469,11 @@ def advance_replay(
     before update_charts (which is triggered by the sim-step-store this
     writes). See slide_chart_x_range.
     """
-    sim_step = min(n_intervals, len(TIMELINE) - 1)
+    # Modulo, not clamp: replay loops back to the start and keeps playing
+    # instead of stalling at the last timestep. n_intervals only advances
+    # while the Interval is enabled, so pausing doesn't skip the clock
+    # forward and the wrap point stays exactly len(TIMELINE) ticks apart.
+    sim_step = n_intervals % len(TIMELINE)
     triggered = ctx.triggered_id
 
     if triggered == "play-pause-btn":
@@ -462,17 +517,22 @@ def advance_replay(
     # exactly what widens the window for response-ordering races (e.g. a
     # sensor switch landing right on a tick can otherwise show the
     # previous sensor's chart title).
+    #
+    # On wraparound, drop any injected events outright. Their trigger_step
+    # is an index into the run that just ended, so after the wrap
+    # `sim_step - trigger_step` is negative — apply_injections' expiry check
+    # can never fire again, and the pulse would instead reappear at the same
+    # step index on every subsequent loop. Clearing them is also what makes
+    # the loop mean "start fresh": the next pass is a clean replay, exactly
+    # like pressing Reset.
+    wrapped = n_intervals > 0 and sim_step == 0
+    if wrapped:
+        still_active = []
+
     events_unchanged = events_signature(still_active) == events_signature(active_events)
     events_output = no_update if events_unchanged else events_to_store(still_active)
 
-    # Auto-pause once the replay reaches the last timestep — otherwise the
-    # Interval keeps firing forever with nothing left to advance to, and
-    # "Pause" stays displayed even though playback has effectively stopped.
-    at_end = sim_step >= len(TIMELINE) - 1
-    disabled_output = True if at_end else no_update
-    button_output = "Play" if at_end else no_update
-
-    return sim_step, events_output, display, chart_x_range(sim_step), disabled_output, button_output
+    return sim_step, events_output, display, chart_x_range(sim_step), no_update, no_update
 
 
 # The sliding window is applied with a direct Plotly.relayout on the graph
@@ -526,14 +586,18 @@ app.clientside_callback(
 
 @app.callback(
     Output("selected-sensor-store", "data"),
-    Input("sensor-selector", "value"),
+    Input({"type": SENSOR_TAB_ID_TYPE, "index": ALL}, "n_clicks"),
     Input({"type": MARKER_ID_TYPE, "index": ALL}, "n_clicks"),
     prevent_initial_call=True,
 )
-def select_sensor(dropdown_value, _marker_clicks):
-    """Either the dropdown or a map-pin click can drive selection; whichever
-    fired is identified via ctx.triggered_id (a plain string for the
-    dropdown, a {"type", "index"} dict for a pattern-matched marker).
+def select_sensor(_tab_clicks, _marker_clicks):
+    """selected-sensor-store is the single source of truth for "which sensor
+    is the left panel showing", and this is the only callback that writes
+    it. Both entry points — a sensor tab and a map pin — are
+    pattern-matching ids of the same shape, so whichever fired is read off
+    ctx.triggered_id["index"] identically; there is no second control
+    holding its own copy of the selection that could drift out of sync
+    (which is what the old dropdown did whenever a pin was clicked).
 
     The n_clicks check is load-bearing, not defensive: update_risk_fanout
     rebuilds the marker LayerGroup's children EVERY tick (to recolor pins by
@@ -543,22 +607,17 @@ def select_sensor(dropdown_value, _marker_clicks):
     though nobody touched the map — and honouring it there would reset the
     selection to that marker (S01, the first) once per tick, silently
     undoing whatever sensor the user picked. A rebuild carries a falsy
-    n_clicks; only a real click carries a count.
-
-    A spurious marker input returns no_update rather than falling through to
-    dropdown_value: the dropdown's own label doesn't follow map-pin clicks,
-    so after picking a pin the dropdown still holds the previous sensor, and
-    falling through would re-assert that stale value every tick — the same
-    reset bug via a different route. Leaving the store untouched is what
-    keeps a pin selection stable during playback.
+    n_clicks; only a real click carries a count. (The tabs are immune by
+    construction — they're never rebuilt, only restyled — but the same
+    guard covers them for free.)
     """
     triggered = ctx.triggered_id
-    if isinstance(triggered, dict) and triggered.get("type") == MARKER_ID_TYPE:
-        clicked = ctx.triggered[0].get("value") if ctx.triggered else None
-        if not clicked:
-            return no_update
-        return triggered["index"]
-    return dropdown_value
+    if not isinstance(triggered, dict):
+        return no_update
+    clicked = ctx.triggered[0].get("value") if ctx.triggered else None
+    if not clicked:
+        return no_update
+    return triggered["index"]
 
 
 @app.callback(
@@ -608,11 +667,19 @@ def _stored_events_signature(active_events: list) -> list:
 )
 def update_charts(sim_step, selected_sensor, active_events_raw, chart_state):
     """The extendData pattern (CLAUDE.md tech stack notes): on a sensor
-    change OR the active-events set actually changing, rebuild both figures
-    from scratch with the full history visible so far (both are explicit,
-    infrequent actions — a full figure resend is fine). On every other call
-    (a replay tick, same sensor, same events), only the row(s) newer than
-    what's already drawn are sent via extendData.
+    change, the active-events set actually changing, OR the replay looping
+    back to the start, rebuild both figures from scratch with the full
+    history visible so far (all three are infrequent — a full figure resend
+    is fine). On every other call (a replay tick, same sensor, same events),
+    only the row(s) newer than what's already drawn are sent via extendData.
+
+    The loop case has to rebuild rather than extend: after a wrap the
+    "newer than what's drawn" slice is empty, so extending would leave the
+    previous pass's whole accumulated trace frozen on screen while the
+    x-axis jumped back to the start — the traces would simply vanish off
+    the right-hand edge. Rebuilding at step 0 clears them and starts the
+    new pass from a single point, which is what makes a loop read as a
+    fresh start rather than a glitch.
 
     A just-triggered event needs the full-rebuild path even though it
     doesn't change sim_step: build_event's trigger_step is "now", and
@@ -637,15 +704,21 @@ def update_charts(sim_step, selected_sensor, active_events_raw, chart_state):
     rainfall_series = get_series(injected, selected_sensor, "rainfall_intensity")
 
     current_signature = _stored_events_signature(active_events)
+    last_rendered_step = chart_state.get("rendered_upto_step", -1)
     sensor_changed = chart_state.get("sensor_id") != selected_sensor
     events_changed = chart_state.get("events_signature") != current_signature
+    # The replay clock only ever moves backwards by wrapping (advance_replay
+    # takes n_intervals modulo the timeline length), so "this step is older
+    # than what's drawn" IS the loop signal — no extra store needed to
+    # communicate it.
+    wrapped = sim_step < last_rendered_step
     new_state = {
         "sensor_id": selected_sensor,
         "rendered_upto_step": sim_step,
         "events_signature": current_signature,
     }
 
-    if sensor_changed or events_changed:
+    if sensor_changed or events_changed or wrapped:
         # The rebuilt figure carries the CURRENT window, not the timeline's
         # start — otherwise switching sensors mid-replay would snap both
         # charts back to the beginning until the next tick nudged them
@@ -658,7 +731,8 @@ def update_charts(sim_step, selected_sensor, active_events_raw, chart_state):
         charts.update_rainfall_figure(rainfall_fig, rainfall_series)
         return water_level_fig, no_update, rainfall_fig, no_update, new_state
 
-    last_rendered_step = chart_state.get("rendered_upto_step", -1)
+    # Only sim_step == last_rendered_step reaches here (a re-fire on the same
+    # step, e.g. while paused); the backwards case was handled as a wrap.
     if sim_step <= last_rendered_step:
         return no_update, no_update, no_update, no_update, chart_state
 
@@ -791,27 +865,6 @@ def _render_rule_eval(sensor_assessment) -> html.Div:
     )
 
 
-def _render_all_sensor_status(assessment) -> html.Div:
-    rows = []
-    for sensor_id in SENSOR_IDS:
-        sensor_assessment = assessment.sensors.get(sensor_id)
-        if sensor_assessment is None:
-            rows.append(html.Div(f"{sensor_id}: no data"))
-            continue
-        color = SEVERITY_COLORS[
-            sensor_assessment.threshold_state if sensor_assessment.possible_fault else sensor_assessment.effective_state
-        ]
-        rows.append(
-            html.Div(
-                [
-                    html.Span("●", style={"color": color, "marginRight": "6px"}),
-                    f"{sensor_id}: {_verdict_label(sensor_assessment)} ({sensor_assessment.latest_water_level:.0f} cm)",
-                ]
-            )
-        )
-    return html.Div(rows)
-
-
 def _sensor_category(sensor_assessment) -> str:
     if sensor_assessment.confirmed_flood:
         return "confirmed_flood"
@@ -879,7 +932,13 @@ def _render_top_bar_injector_slot(active_events: list) -> str:
     Output("overall-risk-display", "children"),
     Output("current-readings-panel", "children"),
     Output("rule-eval-panel", "children"),
-    Output("all-sensor-status-panel", "children"),
+    # The sensor tabs are restyled, never rebuilt — see build_sensor_tabs.
+    # Dash resolves these ALL-outputs in the same order it resolves the
+    # matching ALL-inputs (sorted by id), which for {"index": "S01".."S04"}
+    # is SENSORS_META's own order — so both lists are built by iterating
+    # SENSOR_IDS and line up positionally.
+    Output({"type": SENSOR_TAB_DOT_ID_TYPE, "index": ALL}, "style"),
+    Output({"type": SENSOR_TAB_ID_TYPE, "index": ALL}, "className"),
     Output("event-log-content", "children"),
     Output("event-log-store", "data"),
     Output("sensor-status-store", "data"),
@@ -894,8 +953,14 @@ def _render_top_bar_injector_slot(active_events: list) -> str:
 def update_risk_fanout(sim_step, selected_sensor, active_events_raw, log_entries, previous_categories):
     """Runs risk_assessment.assess_risk once per tick and fans its single
     result out to every display that depends on it — the map, top bar,
-    readings/rule-eval panels, all-sensor summary, and event log all read
-    fields off the same `assessment`; none of them recompute risk.
+    readings/rule-eval panels, the sensor tabs' status dots, and the event
+    log all read fields off the same `assessment`; none of them recompute
+    risk.
+
+    Selection is fanned out from here too (the tabs' `className` and the
+    map's selection halo), because `selected-sensor-store` is already an
+    Input: the tab highlight and the map ring are therefore written in the
+    same response, and can't disagree even for a frame.
 
     Re-derives the injected reading frame the same way advance_replay does,
     rather than reading a shared Store: a full DataFrame isn't something
@@ -910,16 +975,17 @@ def update_risk_fanout(sim_step, selected_sensor, active_events_raw, log_entries
 
     assessment = assess_risk(injected, SENSORS_META)
 
-    markers = build_markers(SENSORS_META, assessment.sensors)
+    markers = build_markers(SENSORS_META, assessment.sensors, selected_sensor)
     overall_risk_display = _render_overall_risk(assessment.overall_state)
+
+    tab_dot_styles = [_status_dot_style(assessment.sensors.get(sid)) for sid in SENSOR_IDS]
+    tab_classes = [_tab_class(sid, selected_sensor) for sid in SENSOR_IDS]
 
     selected_assessment = assessment.sensors.get(selected_sensor)
     rainfall_latest = latest_value(injected, selected_sensor, "rainfall_intensity")
     soil_latest, soil_is_catchment = _latest_soil_moisture(injected, selected_sensor)
     readings_panel = _render_current_readings(selected_assessment, rainfall_latest, soil_latest, soil_is_catchment)
     rule_eval_panel = _render_rule_eval(selected_assessment)
-
-    all_sensor_panel = _render_all_sensor_status(assessment)
 
     new_categories, new_log_entries = _update_event_log(assessment, previous_categories, log_entries)
     event_log_display = _render_event_log(new_log_entries)
@@ -932,7 +998,8 @@ def update_risk_fanout(sim_step, selected_sensor, active_events_raw, log_entries
         overall_risk_display,
         readings_panel,
         rule_eval_panel,
-        all_sensor_panel,
+        tab_dot_styles,
+        tab_classes,
         event_log_display,
         new_log_entries,
         new_categories,

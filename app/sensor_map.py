@@ -22,6 +22,15 @@ its raw (unconfirmed) severity would otherwise be — same fill so you can
 still see how high it's reading, but the ring marks it as unconfirmed
 rather than a real, escalated flood signal."""
 
+SELECTED_RING_COLOR = "#1a73e8"
+SELECTED_RING_RADIUS = 16
+"""The currently-selected sensor gets a solid accent halo drawn AROUND its
+pin — a separate, larger, unfilled CircleMarker rather than a stroke on the
+pin itself, so it can't be confused with the dashed possible_fault ring (a
+sensor can be both selected and faulted at once, and both must stay
+readable). The color is deliberately outside the SEVERITY_COLORS palette:
+it says "this is what you're looking at", not "this is how bad it is"."""
+
 
 def marker_id(sensor_id: str) -> dict:
     return {"type": MARKER_ID_TYPE, "index": sensor_id}
@@ -51,10 +60,40 @@ def _status_label(sensor_assessment) -> str:
     return sensor_assessment.threshold_state
 
 
-def build_markers(sensors_meta: list[dict], assessments: dict | None = None) -> list[dl.CircleMarker]:
-    """One CircleMarker per sensor. `assessments` is `RiskAssessment.sensors`
+def _selection_ring(sensor: dict) -> dl.CircleMarker:
+    """The halo around the selected sensor's pin.
+
+    `interactive=False` so it never swallows the click meant for the pin
+    underneath it (it is drawn first, hence below, but it is also wider —
+    without this its edge would be a dead zone around the marker). It
+    carries no `id`: nothing addresses it as a callback target, and giving
+    it a pattern-matching id would make it show up as a phantom entry in
+    the marker-click ALL-input.
+    """
+    return dl.CircleMarker(
+        center=[sensor["lat"], sensor["lon"]],
+        radius=SELECTED_RING_RADIUS,
+        color=SELECTED_RING_COLOR,
+        weight=3,
+        opacity=0.9,
+        fill=False,
+        dashArray=None,
+        interactive=False,
+    )
+
+
+def build_markers(
+    sensors_meta: list[dict], assessments: dict | None = None, selected_sensor: str | None = None
+) -> list:
+    """One CircleMarker per sensor, plus a selection halo for
+    `selected_sensor` if given. `assessments` is `RiskAssessment.sensors`
     (sensor_id -> SensorAssessment) — omit it (or pass None) for the
-    uniform-neutral pre-assessment render used at layout build time."""
+    uniform-neutral pre-assessment render used at layout build time.
+
+    The halo is emitted BEFORE its pin so Leaflet's SVG renderer paints it
+    underneath (insertion order = paint order), leaving the pin's own fill
+    and fault ring fully visible on top.
+    """
     assessments = assessments or {}
     markers = []
     for sensor in sensors_meta:
@@ -65,6 +104,9 @@ def build_markers(sensors_meta: list[dict], assessments: dict | None = None) -> 
         tooltip_text = f"{sensor_id} — {sensor['name']}"
         if sa is not None:
             tooltip_text += f" — {_status_label(sa)}"
+
+        if sensor_id == selected_sensor:
+            markers.append(_selection_ring(sensor))
 
         markers.append(
             dl.CircleMarker(

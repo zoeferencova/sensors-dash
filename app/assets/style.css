@@ -44,6 +44,53 @@ p {
     display: block;   /* makes it sit on its own line above the dropdown */
 }
 
+/* ---- Sensor tabs (status display + sensor selector in one control) ---- */
+.sensor-tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 14px;
+}
+
+.sensor-tab {
+    flex: 1 1 0;                     /* four equal tabs across the panel */
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 7px 4px;
+    font-size: 12px;
+    font-weight: 500;
+    color: #5a6b7a;
+    background-color: #ffffff;
+    border: 1px solid #d4dce3;
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: inherit;
+    line-height: 1.2;
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.sensor-tab:hover {
+    background-color: #f4f6f8;
+    color: #2c3e50;
+}
+
+/* Selected — same light blue-grey fill as .btn-primary, so "active" reads
+   consistently across the dashboard's controls. */
+.sensor-tab-selected,
+.sensor-tab-selected:hover {
+    background-color: #eef2f5;
+    border-color: #3d5a73;
+    color: #2c3e50;
+    font-weight: 600;
+}
+
+.sensor-tab:focus {
+    outline: 2px solid rgba(61, 90, 115, 0.35);
+    outline-offset: 1px;
+}
+
 /* Base — shared by all buttons */
 .btn {
     font-size: 13px;
