@@ -44,7 +44,7 @@ from event_injector import (
     events_from_store,
     events_signature,
     events_to_store,
-    prune_events,
+    steps_remaining,
 )
 from replay import build_timeline, visible_readings
 from risk_assessment import RAINFALL_CONFIRM_MM_H, assess_risk
@@ -112,6 +112,23 @@ def injected_readings(sim_step: int, active_events: list):
     two callers run back-to-back on the same tick. (Module-global, so two
     browsers on different steps would simply miss rather than get a wrong
     frame — this is a single-user demo dashboard.)
+
+    RETENTION. Events are never dropped from `active_events` except by
+    Reset, which is what keeps an injected spike in the chart's history
+    instead of vanishing the moment the event finishes. This works without
+    any extra machinery because apply_injections keys the overlay on each
+    ROW's own timestep, not on "now": `_pulse` is nonzero only for rows
+    inside `[trigger_step + lag, trigger_step + lag + rise+hold+decay)`, and
+    apply_injections masks on `factor > 0`. So a retained event keeps
+    modifying exactly the rows it always modified, and leaves every later
+    row alone.
+
+    That is also why retaining an event does NOT pin the risk state high
+    forever: assess_risk reads the CURRENT step, whose rows are past the
+    pulse and therefore untouched, so the catchment escalates and then
+    recovers on its own while the spike stays drawn behind it. The injector
+    still only feeds inputs to the rules, exactly as CLAUDE.md requires —
+    retention changes how long an input is remembered, never who decides.
     """
     key = (sim_step, events_signature(active_events))
     if _INJECTED_CACHE["key"] != key:
@@ -475,7 +492,12 @@ app.layout = html.Div(
         # Write-only sink: a clientside callback needs an Output, and this
         # one's whole effect is the Plotly.relayout it performs.
         dcc.Store(id="chart-x-range-applied", data=None),
-        # Append-only log entries (strings), newest kept up to MAX_LOG_ENTRIES.
+        # Bumped by Reset. update_risk_fanout Inputs on it purely to learn
+        # "a Reset just happened" so it can empty the event log — the
+        # active-events-store write alone can't say that, since an empty
+        # list is also the state at page load.
+        dcc.Store(id="reset-token-store", data=0),
+        # Append-only log entries (dicts), newest kept up to MAX_LOG_ENTRIES.
         dcc.Store(id="event-log-store", data=[]),
         # Previous tick's per-sensor category (confirmed_flood/possible_fault/
         # normal) — used only to detect transitions for the event log; never
@@ -520,6 +542,7 @@ def toggle_play_pause(_clicks, is_disabled):
 @app.callback(
     Output("sim-step-store", "data"),
     Output("active-events-store", "data"),
+    Output("reset-token-store", "data"),
     Output("clock-display", "children"),
     Output("chart-x-range-store", "data"),
     Input("replay-interval", "n_intervals"),
@@ -528,15 +551,23 @@ def toggle_play_pause(_clicks, is_disabled):
     State("sim-step-store", "data"),
     State("speed-control", "value"),
     State("active-events-store", "data"),
+    State("reset-token-store", "data"),
     State("injector-scenario-select", "value"),
     State("injector-target-sensor-select", "value"),
 )
 def advance_replay(
-    _n_intervals, _trigger_clicks, _reset_clicks, current_step, steps_per_tick, active_events_raw, scenario, target_sensor
+    _n_intervals,
+    _trigger_clicks,
+    _reset_clicks,
+    current_step,
+    steps_per_tick,
+    active_events_raw,
+    reset_token,
+    scenario,
+    target_sensor,
 ):
-    """Advances the replay clock, and owns active-events-store (which the
-    tick prunes and the injector's Trigger/Reset write) — branches on
-    ctx.triggered_id.
+    """Advances the replay clock, and owns active-events-store (written only
+    by the injector's Trigger and Reset) — branches on ctx.triggered_id.
 
     sim_step ACCUMULATES from sim-step-store rather than being derived from
     n_intervals, because speed is now steps-per-tick (see TICK_MS): the tick
@@ -545,14 +576,15 @@ def advance_replay(
     one step instead of jumping to wherever the free-running n_intervals
     counter had got to.
 
-    This callback is kept CHEAP on purpose. It used to call
-    visible_readings + apply_injections just to find out which injected
-    events had expired, copying the whole growing readings frame every tick
-    — measured at ~190-320ms, i.e. most of the tick budget, for a list
-    comprehension's worth of information. prune_events answers the same
-    question from the event list alone. That mattered because this callback
-    feeds every other one: while it was slow enough to be superseded by the
-    next tick, nothing downstream of it ran at all.
+    The tick path does NO event work at all. Injected events are retained
+    until Reset (see injected_readings), so there is nothing to expire and
+    nothing to write back — the tick is a modulo, a strftime and a Div.
+    That matters because this callback feeds every other one: an earlier
+    version called visible_readings + apply_injections here just to compute
+    which events had expired, copying the whole growing readings frame every
+    step (~190-320ms), which made it slow enough to be superseded by the
+    following tick at any speed above 1x — and then nothing downstream of it
+    ran at all.
 
     Also emits the charts' sliding x-axis window, for one specific reason:
     the window has to reach the client in a DIFFERENT response than the
@@ -564,18 +596,16 @@ def advance_replay(
     sim_step = current_step or 0
 
     if triggered == "injector-reset-btn":
-        # active_events_raw is already the raw (dict) list — no need to
-        # deserialize just to check emptiness. Skips a spurious Store write
-        # (and the callbacks it would re-trigger) when there was nothing to
-        # clear.
-        events_output = no_update if not active_events_raw else []
-        return no_update, events_output, no_update, no_update
-
-    active_events = events_from_store(active_events_raw)
+        # Always writes, even when there was nothing injected: the token is
+        # what tells update_risk_fanout to clear the event log, and Reset
+        # means "clean slate" whether or not an event happened to be
+        # retained at the time.
+        return no_update, [], (reset_token or 0) + 1, no_update, no_update
 
     if triggered == "injector-trigger-btn":
+        active_events = events_from_store(active_events_raw)
         new_event = build_event(scenario, target_sensor, DEFAULT_MAGNITUDE[scenario], sim_step)
-        return no_update, events_to_store(active_events + [new_event]), no_update, no_update
+        return no_update, events_to_store(active_events + [new_event]), no_update, no_update, no_update
 
     # Default path: a replay-interval tick (or the initial page-load call).
     # Never fires while paused, since a disabled dcc.Interval simply doesn't
@@ -583,7 +613,6 @@ def advance_replay(
     # step 1 with step 0 never rendered.
     if triggered is not None:
         sim_step = (sim_step + (steps_per_tick or 1)) % len(TIMELINE)
-    still_active = prune_events(active_events, sim_step)
 
     current_time = TIMELINE[sim_step]
     display = html.Div(
@@ -594,32 +623,19 @@ def advance_replay(
         ],
     )
 
-    # Only write active-events-store when an event actually expired this
-    # tick — writing a freshly-reserialized-but-value-identical list every
-    # tick regardless would spuriously re-trigger every callback that Inputs
-    # on this Store (update_charts, update_risk_fanout) on EVERY tick, not
-    # just when something real changed. That doubled invocation rate is
-    # exactly what widens the window for response-ordering races (e.g. a
-    # sensor switch landing right on a tick can otherwise show the
-    # previous sensor's chart title).
+    # active-events-store is deliberately never written on a tick. Writing a
+    # reserialized-but-identical list every tick would spuriously re-trigger
+    # every callback that Inputs on it (update_charts, update_risk_fanout)
+    # on EVERY tick rather than only when something real changed — the
+    # doubled invocation rate is exactly what widens the window for
+    # response-ordering races (e.g. a sensor switch landing on a tick
+    # showing the previous sensor's chart title).
     #
-    # On wraparound, drop any injected events outright. Their trigger_step
-    # is an index into the run that just ended, so after the wrap
-    # `sim_step - trigger_step` is negative — the expiry check can never
-    # fire again, and the pulse would instead reappear at the same step
-    # index on every subsequent loop. Clearing them is also what makes the
-    # loop mean "start fresh": the next pass is a clean replay, exactly like
-    # pressing Reset.
-    #
-    # Detected as "the clock moved backwards", not as "the clock is exactly
-    # 0": at 8x a tick advances 8 steps and can step straight over 0.
-    if sim_step < (current_step or 0):
-        still_active = []
-
-    events_unchanged = events_signature(still_active) == events_signature(active_events)
-    events_output = no_update if events_unchanged else events_to_store(still_active)
-
-    return sim_step, events_output, display, chart_x_range(sim_step)
+    # Wraparound no longer clears the events either. A retained event's
+    # overlay is keyed on each ROW's timestep, so on the next lap the same
+    # rows are injected again and the storm replays where it was put — which
+    # is what "retained until Reset" has to mean for a looping replay.
+    return sim_step, no_update, no_update, display, chart_x_range(sim_step)
 
 
 # The sliding window is applied with a direct Plotly.relayout on the graph
@@ -1110,25 +1126,28 @@ def _render_event_log(log_entries: list) -> html.Div:
 
 
 def _render_active_events(active_events: list, sim_step: int) -> html.Div:
-    """The injector panel's "still active" readout — mirrors the original
-    Streamlit render_sidebar_status, minus session_state: steps-remaining
-    counts down as sim_step advances since this re-renders every tick."""
+    """The injector panel's status readout. Steps-remaining counts down as
+    sim_step advances since this re-renders every tick; once it hits zero
+    the event has finished unfolding but is still retained (its spike stays
+    in the chart history), so the readout says so rather than sitting on a
+    misleading "0 steps left" forever."""
     if not active_events:
         return html.Div("Status: no simulated events active", className="injector-status")
     rows = []
     for event in active_events:
-        remaining = max(event.duration - (sim_step - event.trigger_step), 0)
         label = event.scenario
         if event.target_sensor:
             label += f" @ {event.target_sensor}"
-        rows.append(html.Div(f"{label} — magnitude {event.magnitude:g}, {remaining} steps left", className="injector-status"))
+        remaining = steps_remaining(event, sim_step)
+        state = f"{remaining} steps left" if remaining else "complete — retained until Reset"
+        rows.append(html.Div(f"{label} — magnitude {event.magnitude:g}, {state}", className="injector-status"))
     return html.Div(rows)
 
 
 def _render_top_bar_injector_slot(active_events: list) -> str:
     if not active_events:
         return ""
-    return f"{len(active_events)} active injected event(s)"
+    return f"{len(active_events)} injected event(s)"
 
 
 @app.callback(
@@ -1151,10 +1170,11 @@ def _render_top_bar_injector_slot(active_events: list) -> str:
     Input("sim-step-store", "data"),
     Input("selected-sensor-store", "data"),
     Input("active-events-store", "data"),
+    Input("reset-token-store", "data"),
     State("event-log-store", "data"),
     State("sensor-status-store", "data"),
 )
-def update_risk_fanout(sim_step, selected_sensor, active_events_raw, log_entries, previous_categories):
+def update_risk_fanout(sim_step, selected_sensor, active_events_raw, _reset_token, log_entries, previous_categories):
     """Runs risk_assessment.assess_risk once per tick and fans its single
     result out to every display that depends on it — the map, top bar,
     readings/rule-eval panels, the sensor tabs' status dots, and the event
@@ -1166,12 +1186,19 @@ def update_risk_fanout(sim_step, selected_sensor, active_events_raw, log_entries
     Input: the tab highlight and the map ring are therefore written in the
     same response, and can't disagree even for a frame.
 
-    Re-derives the injected reading frame the same way advance_replay does,
-    rather than reading a shared Store: a full DataFrame isn't something
-    worth round-tripping through JSON every tick, and apply_injections is
-    pure, so calling it again here with the same (already-pruned)
-    active_events is exactly as correct as sharing one result would be —
-    just a few extra microseconds of pandas filtering on a 10k-row frame.
+    Reads the injected frame through the shared memo rather than a Store: a
+    full DataFrame isn't worth round-tripping through JSON every tick, and
+    injected_readings is pure, so this and update_charts get the identical
+    frame for the tick without either of them owning it.
+
+    Reset clears the event log here. It has to be this callback — Dash
+    allows one callback per Output and this one owns event-log-store — and
+    it has to key off reset-token-store rather than "active_events is now
+    empty", which is indistinguishable from page load. Clearing
+    sensor-status-store alongside it is what stops the next tick logging a
+    phantom transition out of the state the cleared entries described:
+    _update_event_log treats an empty previous-categories dict as "no
+    history yet" and re-seeds silently.
     """
     active_events = events_from_store(active_events_raw)
     injected = injected_readings(sim_step, active_events)
@@ -1190,7 +1217,11 @@ def update_risk_fanout(sim_step, selected_sensor, active_events_raw, log_entries
     readings_panel = _render_current_readings(selected_assessment, rainfall_latest, soil_latest, soil_is_catchment)
     rule_eval_panel = _render_rule_eval(selected_assessment)
 
-    new_categories, new_log_entries = _update_event_log(assessment, previous_categories, log_entries)
+    reset_fired = any(t["prop_id"].startswith("reset-token-store") for t in ctx.triggered)
+    if reset_fired:
+        new_categories, new_log_entries = {}, []
+    else:
+        new_categories, new_log_entries = _update_event_log(assessment, previous_categories, log_entries)
     event_log_display = _render_event_log(new_log_entries)
 
     active_events_display = _render_active_events(active_events, sim_step)

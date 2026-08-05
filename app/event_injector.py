@@ -205,17 +205,15 @@ def _still_active(event: InjectedEvent, sim_step: int) -> bool:
     return sim_step - event.trigger_step <= event.duration
 
 
-def prune_events(active_events: list, sim_step: int) -> list:
-    """The subset of `active_events` that hasn't expired by `sim_step`.
+def steps_remaining(event: InjectedEvent, sim_step: int) -> int:
+    """Steps left in the event's rise/hold/decay envelope, 0 once it has
+    fully played out.
 
-    Exactly the expiry test apply_injections applies while it blends, split
-    out so a caller that only wants the pruned list doesn't have to build
-    the injected frame to get it. The replay tick is that caller: it was
-    copying the entire visible-readings frame every step purely to read this
-    list back off the second return value, which made the tick slow enough
-    to be superseded by the following tick at anything above 1x speed.
+    Purely for the injector's status readout. It is NOT an expiry test: the
+    dashboard retains events past 0 so their spike stays in the chart's
+    history until Reset (see main.injected_readings).
     """
-    return [event for event in active_events if _still_active(event, sim_step)]
+    return max(event.duration - (sim_step - event.trigger_step), 0)
 
 
 def apply_injections(
