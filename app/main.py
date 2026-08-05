@@ -31,7 +31,7 @@ import plotly.graph_objects as go
 from dash import ALL, Dash, Input, Output, State, ctx, dcc, html, no_update
 
 import charts
-from constants import NEUTRAL_PIN_COLOR, SEVERITY_COLORS, STAGES
+from constants import NEUTRAL_PIN_COLOR, SEVERITY_COLORS, STAGES, THRESHOLDS
 from data_loader import clean_readings, get_series, latest_value, load_long, load_sensors
 from event_injector import (
     DEFAULT_MAGNITUDE,
@@ -339,6 +339,35 @@ left_panel_top = html.Div(
                 html.Div(
                     className="chart-slot",
                     children=dcc.Graph(id="water-level-graph", responsive=True, figure=go.Figure()),
+                ),
+                # The ČHMÚ stage/value key for the water-level chart's
+                # threshold hlines, in plain HTML rather than a Plotly
+                # legend — the hlines are layout shapes and were never going
+                # to carry a native legend entry, so the old approach faked
+                # one with zero-data proxy traces. Static: built once from
+                # THRESHOLDS (never a per-tick rebuild), so it can't drift
+                # from the actual bands and never touches the extendData
+                # path used for the real data traces (indices 0/1).
+                html.Div(
+                    className="chart-threshold-legend",
+                    children=[
+                        html.Div(
+                            className="chart-threshold-legend-item",
+                            children=[
+                                # A line swatch, not a dot: each entry keys a
+                                # solid hline on the chart, so its legend
+                                # mark should have the same shape as the
+                                # thing it stands for (the map legend's
+                                # "Botič reach" entry makes the same call).
+                                html.Span(
+                                    className="chart-threshold-legend-line",
+                                    style={"backgroundColor": SEVERITY_COLORS[stage]},
+                                ),
+                                html.Span(f"{stage} {level}"),
+                            ],
+                        )
+                        for stage, level in THRESHOLDS.items()
+                    ],
                 ),
                 html.Div(
                     className="chart-slot chart-slot-short",

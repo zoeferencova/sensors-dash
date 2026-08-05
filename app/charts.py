@@ -32,7 +32,11 @@ INJECTED_MARKER_COLOR = "#e07b00"
 # CLAUDE.md): quiet chrome, data forward. No axis lines or box, no tick
 # marks, horizontal+vertical gridlines in a very light grey, units carried
 # by a small top-left title instead of rotated axis titles, and the
-# threshold values moved off the plot into the legend.
+# threshold values moved off the plot entirely into an HTML legend
+# (main.py's chart_threshold_legend, below the water-level chart) rather
+# than a Plotly legend — hlines are layout shapes, so they never carried a
+# legend entry natively, and the fake zero-data proxy traces that used to
+# stand in for them are gone.
 #
 # The font stack mirrors assets/style.css. Inter is already loaded there
 # for the HTML, but Plotly draws its labels as SVG text with its own font
@@ -70,6 +74,13 @@ def _base_layout(title: str) -> dict:
         # Left/bottom stay small because automargin grows them to fit the
         # tick labels; the top leaves room for the title.
         margin=dict(l=8, r=12, t=44, b=5),
+        # Explicit rather than left to Plotly's default: with the threshold
+        # proxy traces gone, "simulated event" is the only showlegend=True
+        # trace left, and Plotly.js hides the legend entirely when fewer
+        # than two traces are legend-eligible unless told otherwise — which
+        # would silently drop the one label that explains the diamond
+        # marker's meaning.
+        showlegend=True,
         legend=dict(
             orientation="h",
             x=0,
@@ -107,30 +118,6 @@ def _apply_axis_style(fig: go.Figure) -> None:
     )
     fig.update_xaxes(**axis_style)
     fig.update_yaxes(**axis_style)
-
-
-def _threshold_legend_trace(stage: str, level: int) -> go.Scatter:
-    """A legend-only proxy for a threshold line.
-
-    The threshold itself is an hline, which is a layout *shape* and so can
-    never appear in the legend. The reference puts the stage name over its
-    numeric value beneath the chart, which is what the `<br>` gives; doing
-    it this way also lets the lines themselves stay unlabelled, freeing the
-    ~80px right margin the old inline annotations needed.
-
-    Carries no data (`[None]`), so it draws nothing and cannot affect
-    autorange. It sits at trace index 2+ — main line and injected markers
-    keep indices 0 and 1, which is what main.update_charts extends.
-    """
-    return go.Scatter(
-        x=[None],
-        y=[None],
-        mode="markers",
-        marker=dict(color=SEVERITY_COLORS[stage], size=7),
-        name=f"{stage}<br>{level}",
-        showlegend=True,
-        hoverinfo="skip",
-    )
 
 
 def _injected_marker_trace() -> go.Scatter:
@@ -211,11 +198,12 @@ def build_water_level_figure(sensor_id: str, x_range=None) -> go.Figure:
     fig.add_trace(_injected_marker_trace())
 
     # Solid, unlabelled threshold lines (the reference draws them this way);
-    # each one's name and value are carried by its legend proxy below.
+    # each one's name and value are carried by the HTML legend main.py
+    # renders below this chart, not a Plotly legend proxy — hlines are
+    # layout *shapes*, so they were never going to appear in a Plotly legend
+    # on their own regardless.
     for stage, level in THRESHOLDS.items():
         fig.add_hline(y=level, line=dict(color=SEVERITY_COLORS[stage], width=1.5))
-    for stage, level in THRESHOLDS.items():
-        fig.add_trace(_threshold_legend_trace(stage, level))
 
     fig.update_layout(**_base_layout(f"{sensor_id} — Water level in cm"))
     _apply_axis_style(fig)

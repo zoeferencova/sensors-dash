@@ -360,6 +360,32 @@
     margin-top: 6px;
 }
 
+/* The ČHMÚ stage/value key for the water-level chart's threshold lines,
+   replacing the fake zero-data Plotly traces that used to draw this as a
+   chart legend. One row, small and muted — a key you consult, not a
+   reading. */
+.chart-threshold-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    margin: 6px 0 0 8px;
+}
+
+.chart-threshold-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10px;
+    color: var(--ink-faint);
+}
+
+.chart-threshold-legend-line {
+    flex: 0 0 auto;
+    width: 12px;
+    height: 2px;
+    border-radius: 1px;
+}
+
 /* ---- Rule-evaluation accordion ---------------------------------------- */
 /* Open by default (set on the Details component), so no top border is
    needed to fence it off — the label plus whitespace is the separation. */
