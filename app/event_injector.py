@@ -201,6 +201,21 @@ def build_event(scenario: str, target_sensor: str | None, magnitude: float, trig
     return InjectedEvent(scenario, target_sensor, magnitude, trigger_step, deltas)
 
 
+def _still_active(event: InjectedEvent, sim_step: int) -> bool:
+    return sim_step - event.trigger_step <= event.duration
+
+
+def steps_remaining(event: InjectedEvent, sim_step: int) -> int:
+    """Steps left in the event's rise/hold/decay envelope, 0 once it has
+    fully played out.
+
+    Purely for the injector's status readout. It is NOT an expiry test: the
+    dashboard retains events past 0 so their spike stays in the chart's
+    history until Reset (see main.injected_readings).
+    """
+    return max(event.duration - (sim_step - event.trigger_step), 0)
+
+
 def apply_injections(
     df: pd.DataFrame, timeline: list, active_events: list, sim_step: int
 ) -> tuple[pd.DataFrame, list]:
@@ -240,7 +255,7 @@ def apply_injections(
                 result.loc[active_mask, "value"] = result.loc[active_mask, "value"] + factor[active_mask] * delta.peak
             result.loc[active_mask, "injected"] = True
 
-        if sim_step - event.trigger_step <= event.duration:
+        if _still_active(event, sim_step):
             still_active.append(event)
 
     return result, still_active

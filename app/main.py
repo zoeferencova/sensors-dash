@@ -44,6 +44,7 @@ from event_injector import (
     events_from_store,
     events_signature,
     events_to_store,
+    steps_remaining,
 )
 from replay import build_timeline, visible_readings
 from risk_assessment import RAINFALL_CONFIRM_MM_H, assess_risk
@@ -87,6 +88,55 @@ def chart_x_range(sim_step: int) -> list[str]:
     """
     now = TIMELINE[max(0, min(sim_step, len(TIMELINE) - 1))]
     return [(now - CHART_WINDOW).isoformat(), now.isoformat()]
+
+
+# The injected readings frame for one moment of the replay, memoized on
+# (sim_step, active events). update_charts and update_risk_fanout both need
+# exactly this frame for the same tick and used to build it independently —
+# two full copies of a frame that grows with the replay, per tick. Caching
+# one entry collapses that to one build and roughly halves what a tick costs
+# downstream, which is the headroom that keeps the chain comfortably inside
+# the tick period.
+#
+# Read-only by contract: callers pass it to get_series/latest_value/
+# assess_risk, none of which mutate. Anything that needs to modify it must
+# take its own copy.
+_INJECTED_CACHE: dict = {"key": None, "frame": None}
+
+
+def injected_readings(sim_step: int, active_events: list):
+    """visible_readings + apply_injections for `sim_step`, memoized.
+
+    Both inputs are captured in the key, and apply_injections is pure, so a
+    hit is indistinguishable from recomputing. A single entry is enough: the
+    two callers run back-to-back on the same tick. (Module-global, so two
+    browsers on different steps would simply miss rather than get a wrong
+    frame — this is a single-user demo dashboard.)
+
+    RETENTION. Events are never dropped from `active_events` except by
+    Reset, which is what keeps an injected spike in the chart's history
+    instead of vanishing the moment the event finishes. This works without
+    any extra machinery because apply_injections keys the overlay on each
+    ROW's own timestep, not on "now": `_pulse` is nonzero only for rows
+    inside `[trigger_step + lag, trigger_step + lag + rise+hold+decay)`, and
+    apply_injections masks on `factor > 0`. So a retained event keeps
+    modifying exactly the rows it always modified, and leaves every later
+    row alone.
+
+    That is also why retaining an event does NOT pin the risk state high
+    forever: assess_risk reads the CURRENT step, whose rows are past the
+    pulse and therefore untouched, so the catchment escalates and then
+    recovers on its own while the spike stays drawn behind it. The injector
+    still only feeds inputs to the rules, exactly as CLAUDE.md requires —
+    retention changes how long an input is remembered, never who decides.
+    """
+    key = (sim_step, events_signature(active_events))
+    if _INJECTED_CACHE["key"] != key:
+        visible = visible_readings(READINGS, TIMELINE, sim_step)
+        injected, _ = apply_injections(visible, TIMELINE, active_events, sim_step)
+        _INJECTED_CACHE["key"] = key
+        _INJECTED_CACHE["frame"] = injected
+    return _INJECTED_CACHE["frame"]
 
 
 # --- Sensor status dots + selectable sensor tabs --------------------------
@@ -165,11 +215,30 @@ def build_sensor_tabs(selected_sensor: str) -> list[html.Button]:
     ]
 
 
+# The replay clock ticks at a FIXED rate and speed changes how many timeline
+# steps each tick advances — it does NOT shorten the tick period.
+#
+# Speed used to be the Interval's period (1x=1000ms ... 8x=125ms), which
+# broke every speed above 1x. One tick fans out into the full callback chain
+# (advance_replay -> update_charts + update_risk_fanout), and that chain
+# takes a few hundred ms. Once the tick period dropped below the time a
+# callback takes, every tick re-triggered advance_replay while the previous
+# invocation was still in flight; Dash discards the superseded response, so
+# its outputs never committed, sim-step-store never moved, and nothing
+# downstream ever ran. Measured at 8x: advance_replay invoked 7.8x/second,
+# update_charts invoked ZERO times.
+#
+# A fixed period can't outrun the chain no matter which speed is selected,
+# and the per-speed timeline rate is unchanged from what the labels always
+# meant (1x = 1 step/second, 8x = 8 steps/second) — 8x now arrives as one
+# 8-step advance per second instead of eight advances that never landed.
+TICK_MS = 1000
+
 SPEED_OPTIONS = [
-    {"label": "1x", "value": 1000},
-    {"label": "2x", "value": 500},
-    {"label": "4x", "value": 250},
-    {"label": "8x", "value": 125},
+    {"label": "1x", "value": 1},
+    {"label": "2x", "value": 2},
+    {"label": "4x", "value": 4},
+    {"label": "8x", "value": 8},
 ]
 
 app = Dash(__name__)
@@ -195,7 +264,7 @@ top_bar = html.Div(
                         dcc.RadioItems(
                             id="speed-control",
                             options=SPEED_OPTIONS,
-                            value=1000,
+                            value=1,
                             inline=True,
                             className="speed-segmented",
                         ),
@@ -423,15 +492,28 @@ app.layout = html.Div(
         # Write-only sink: a clientside callback needs an Output, and this
         # one's whole effect is the Plotly.relayout it performs.
         dcc.Store(id="chart-x-range-applied", data=None),
-        # Append-only log entries (strings), newest kept up to MAX_LOG_ENTRIES.
+        # Bumped by Reset. update_risk_fanout Inputs on it purely to learn
+        # "a Reset just happened" so it can empty the event log — the
+        # active-events-store write alone can't say that, since an empty
+        # list is also the state at page load.
+        dcc.Store(id="reset-token-store", data=0),
+        # Append-only log entries (dicts), newest kept up to MAX_LOG_ENTRIES.
         dcc.Store(id="event-log-store", data=[]),
+        # Highest timestep assess_risk has already been run for. The gap
+        # between it and the new sim_step is what update_risk_fanout sweeps,
+        # so a tick that advances 8 steps still evaluates all 8. -1 means
+        # "nothing assessed yet" (page load).
+        dcc.Store(id="last-assessed-step-store", data=-1),
         # Previous tick's per-sensor category (confirmed_flood/possible_fault/
         # normal) — used only to detect transitions for the event log; never
         # displayed directly. Empty dict means "no history yet" (page load).
         dcc.Store(id="sensor-status-store", data={}),
         # disabled=True: replay opens paused at the first timestep, per
         # CLAUDE.md — history builds up as it plays, not fully populated.
-        dcc.Interval(id="replay-interval", interval=1000, n_intervals=0, disabled=False),
+        # Fixed period — see TICK_MS. `interval` is never a callback Output,
+        # so the timer is created once and only ever started/stopped by
+        # `disabled`; it can't be reset mid-flight by a speed change.
+        dcc.Interval(id="replay-interval", interval=TICK_MS, n_intervals=0, disabled=False),
     ],
 )
 
@@ -440,39 +522,74 @@ app.layout = html.Div(
 
 
 @app.callback(
-    Output("replay-interval", "interval"),
-    Input("speed-control", "value"),
+    Output("replay-interval", "disabled"),
+    Output("play-pause-btn", "children"),
+    Input("play-pause-btn", "n_clicks"),
+    State("replay-interval", "disabled"),
+    prevent_initial_call=True,
 )
-def set_speed(interval_ms):
-    return interval_ms
+def toggle_play_pause(_clicks, is_disabled):
+    """Play/pause is its OWN callback, deliberately not merged into
+    advance_replay.
+
+    While it shared advance_replay, a Pause click and a replay tick were the
+    same callback — so a click landed as one more invocation of a callback
+    the ticks were already re-triggering, and Dash discards a superseded
+    in-flight invocation. Above 1x the click's response was reliably thrown
+    away before it could commit `disabled`, which is exactly why pause "only
+    worked at 1x". Separate callbacks can't supersede each other, so this
+    now lands on the first click at any speed.
+    """
+    now_disabled = not is_disabled
+    return now_disabled, ("Play" if now_disabled else "Pause")
 
 
 @app.callback(
     Output("sim-step-store", "data"),
     Output("active-events-store", "data"),
+    Output("reset-token-store", "data"),
     Output("clock-display", "children"),
     Output("chart-x-range-store", "data"),
-    Output("replay-interval", "disabled"),
-    Output("play-pause-btn", "children"),
     Input("replay-interval", "n_intervals"),
-    Input("play-pause-btn", "n_clicks"),
     Input("injector-trigger-btn", "n_clicks"),
     Input("injector-reset-btn", "n_clicks"),
+    State("sim-step-store", "data"),
+    State("speed-control", "value"),
     State("active-events-store", "data"),
+    State("reset-token-store", "data"),
     State("injector-scenario-select", "value"),
     State("injector-target-sensor-select", "value"),
-    State("replay-interval", "disabled"),
 )
 def advance_replay(
-    n_intervals, _play_clicks, _trigger_clicks, _reset_clicks, active_events_raw, scenario, target_sensor, is_disabled
+    _n_intervals,
+    _trigger_clicks,
+    _reset_clicks,
+    current_step,
+    steps_per_tick,
+    active_events_raw,
+    reset_token,
+    scenario,
+    target_sensor,
 ):
-    """Owns active-events-store AND replay-interval/play-pause-btn, since
-    Dash requires exactly one callback per Output and both are now touched
-    from more than one control (the tick itself, Play/Pause, Trigger,
-    Reset) — branches on ctx.triggered_id. sim_step is a pure function of
-    n_intervals (modulo the timeline length, so playback loops) and is
-    recomputed the same way regardless of which Input fired, since Trigger
-    needs "now" as the new event's trigger_step.
+    """Advances the replay clock, and owns active-events-store (written only
+    by the injector's Trigger and Reset) — branches on ctx.triggered_id.
+
+    sim_step ACCUMULATES from sim-step-store rather than being derived from
+    n_intervals, because speed is now steps-per-tick (see TICK_MS): the tick
+    count no longer maps 1:1 to timeline position. The accumulator also
+    degrades better — if a tick's response is ever dropped, playback loses
+    one step instead of jumping to wherever the free-running n_intervals
+    counter had got to.
+
+    The tick path does NO event work at all. Injected events are retained
+    until Reset (see injected_readings), so there is nothing to expire and
+    nothing to write back — the tick is a modulo, a strftime and a Div.
+    That matters because this callback feeds every other one: an earlier
+    version called visible_readings + apply_injections here just to compute
+    which events had expired, copying the whole growing readings frame every
+    step (~190-320ms), which made it slow enough to be superseded by the
+    following tick at any speed above 1x — and then nothing downstream of it
+    ran at all.
 
     Also emits the charts' sliding x-axis window, for one specific reason:
     the window has to reach the client in a DIFFERENT response than the
@@ -480,36 +597,27 @@ def advance_replay(
     before update_charts (which is triggered by the sim-step-store this
     writes). See slide_chart_x_range.
     """
-    # Modulo, not clamp: replay loops back to the start and keeps playing
-    # instead of stalling at the last timestep. n_intervals only advances
-    # while the Interval is enabled, so pausing doesn't skip the clock
-    # forward and the wrap point stays exactly len(TIMELINE) ticks apart.
-    sim_step = n_intervals % len(TIMELINE)
     triggered = ctx.triggered_id
-
-    if triggered == "play-pause-btn":
-        now_disabled = not is_disabled
-        return no_update, no_update, no_update, no_update, now_disabled, ("Play" if now_disabled else "Pause")
+    sim_step = current_step or 0
 
     if triggered == "injector-reset-btn":
-        # active_events_raw is already the raw (dict) list — no need to
-        # deserialize just to check emptiness. Skips a spurious Store write
-        # (and the callbacks it would re-trigger) when there was nothing to
-        # clear.
-        events_output = no_update if not active_events_raw else []
-        return no_update, events_output, no_update, no_update, no_update, no_update
-
-    active_events = events_from_store(active_events_raw)
+        # Always writes, even when there was nothing injected: the token is
+        # what tells update_risk_fanout to clear the event log, and Reset
+        # means "clean slate" whether or not an event happened to be
+        # retained at the time.
+        return no_update, [], (reset_token or 0) + 1, no_update, no_update
 
     if triggered == "injector-trigger-btn":
+        active_events = events_from_store(active_events_raw)
         new_event = build_event(scenario, target_sensor, DEFAULT_MAGNITUDE[scenario], sim_step)
-        return no_update, events_to_store(active_events + [new_event]), no_update, no_update, no_update, no_update
+        return no_update, events_to_store(active_events + [new_event]), no_update, no_update, no_update
 
     # Default path: a replay-interval tick (or the initial page-load call).
     # Never fires while paused, since a disabled dcc.Interval simply doesn't
-    # tick.
-    visible = visible_readings(READINGS, TIMELINE, sim_step)
-    _injected, still_active = apply_injections(visible, TIMELINE, active_events, sim_step)
+    # tick. The initial call must NOT advance, or the replay would open on
+    # step 1 with step 0 never rendered.
+    if triggered is not None:
+        sim_step = (sim_step + (steps_per_tick or 1)) % len(TIMELINE)
 
     current_time = TIMELINE[sim_step]
     display = html.Div(
@@ -520,30 +628,19 @@ def advance_replay(
         ],
     )
 
-    # Only write active-events-store when an event actually expired this
-    # tick — writing a freshly-reserialized-but-value-identical list every
-    # tick regardless would spuriously re-trigger every callback that Inputs
-    # on this Store (update_charts, update_risk_fanout) on EVERY tick, not
-    # just when something real changed. That doubled invocation rate is
-    # exactly what widens the window for response-ordering races (e.g. a
-    # sensor switch landing right on a tick can otherwise show the
-    # previous sensor's chart title).
+    # active-events-store is deliberately never written on a tick. Writing a
+    # reserialized-but-identical list every tick would spuriously re-trigger
+    # every callback that Inputs on it (update_charts, update_risk_fanout)
+    # on EVERY tick rather than only when something real changed — the
+    # doubled invocation rate is exactly what widens the window for
+    # response-ordering races (e.g. a sensor switch landing on a tick
+    # showing the previous sensor's chart title).
     #
-    # On wraparound, drop any injected events outright. Their trigger_step
-    # is an index into the run that just ended, so after the wrap
-    # `sim_step - trigger_step` is negative — apply_injections' expiry check
-    # can never fire again, and the pulse would instead reappear at the same
-    # step index on every subsequent loop. Clearing them is also what makes
-    # the loop mean "start fresh": the next pass is a clean replay, exactly
-    # like pressing Reset.
-    wrapped = n_intervals > 0 and sim_step == 0
-    if wrapped:
-        still_active = []
-
-    events_unchanged = events_signature(still_active) == events_signature(active_events)
-    events_output = no_update if events_unchanged else events_to_store(still_active)
-
-    return sim_step, events_output, display, chart_x_range(sim_step), no_update, no_update
+    # Wraparound no longer clears the events either. A retained event's
+    # overlay is keyed on each ROW's timestep, so on the next lap the same
+    # rows are injected again and the storm replays where it was put — which
+    # is what "retained until Reset" has to mean for a looping replay.
+    return sim_step, no_update, no_update, display, chart_x_range(sim_step)
 
 
 # The sliding window is applied with a direct Plotly.relayout on the graph
@@ -725,8 +822,7 @@ def update_charts(sim_step, selected_sensor, active_events_raw, chart_state):
     instead.
     """
     active_events = events_from_store(active_events_raw)
-    visible = visible_readings(READINGS, TIMELINE, sim_step)
-    injected, _ = apply_injections(visible, TIMELINE, active_events, sim_step)
+    injected = injected_readings(sim_step, active_events)
     water_level_series = get_series(injected, selected_sensor, "water_level")
     rainfall_series = get_series(injected, selected_sensor, "rainfall_intensity")
 
@@ -735,9 +831,10 @@ def update_charts(sim_step, selected_sensor, active_events_raw, chart_state):
     sensor_changed = chart_state.get("sensor_id") != selected_sensor
     events_changed = chart_state.get("events_signature") != current_signature
     # The replay clock only ever moves backwards by wrapping (advance_replay
-    # takes n_intervals modulo the timeline length), so "this step is older
-    # than what's drawn" IS the loop signal — no extra store needed to
-    # communicate it.
+    # takes its accumulated step modulo the timeline length), so "this step
+    # is older than what's drawn" IS the loop signal — no extra store needed
+    # to communicate it. Holds for any speed: a multi-step tick that jumps
+    # over 0 still lands on a smaller step than the one already drawn.
     wrapped = sim_step < last_rendered_step
     new_state = {
         "sensor_id": selected_sensor,
@@ -1034,25 +1131,28 @@ def _render_event_log(log_entries: list) -> html.Div:
 
 
 def _render_active_events(active_events: list, sim_step: int) -> html.Div:
-    """The injector panel's "still active" readout — mirrors the original
-    Streamlit render_sidebar_status, minus session_state: steps-remaining
-    counts down as sim_step advances since this re-renders every tick."""
+    """The injector panel's status readout. Steps-remaining counts down as
+    sim_step advances since this re-renders every tick; once it hits zero
+    the event has finished unfolding but is still retained (its spike stays
+    in the chart history), so the readout says so rather than sitting on a
+    misleading "0 steps left" forever."""
     if not active_events:
         return html.Div("Status: no simulated events active", className="injector-status")
     rows = []
     for event in active_events:
-        remaining = max(event.duration - (sim_step - event.trigger_step), 0)
         label = event.scenario
         if event.target_sensor:
             label += f" @ {event.target_sensor}"
-        rows.append(html.Div(f"{label} — magnitude {event.magnitude:g}, {remaining} steps left", className="injector-status"))
+        remaining = steps_remaining(event, sim_step)
+        state = f"{remaining} steps left" if remaining else "complete — retained until Reset"
+        rows.append(html.Div(f"{label} — magnitude {event.magnitude:g}, {state}", className="injector-status"))
     return html.Div(rows)
 
 
 def _render_top_bar_injector_slot(active_events: list) -> str:
     if not active_events:
         return ""
-    return f"{len(active_events)} active injected event(s)"
+    return f"{len(active_events)} injected event(s)"
 
 
 @app.callback(
@@ -1070,15 +1170,20 @@ def _render_top_bar_injector_slot(active_events: list) -> str:
     Output("event-log-content", "children"),
     Output("event-log-store", "data"),
     Output("sensor-status-store", "data"),
+    Output("last-assessed-step-store", "data"),
     Output("injector-active-events-display", "children"),
     Output("top-bar-injector-slot", "children"),
     Input("sim-step-store", "data"),
     Input("selected-sensor-store", "data"),
     Input("active-events-store", "data"),
+    Input("reset-token-store", "data"),
     State("event-log-store", "data"),
     State("sensor-status-store", "data"),
+    State("last-assessed-step-store", "data"),
 )
-def update_risk_fanout(sim_step, selected_sensor, active_events_raw, log_entries, previous_categories):
+def update_risk_fanout(
+    sim_step, selected_sensor, active_events_raw, _reset_token, log_entries, previous_categories, last_assessed_step
+):
     """Runs risk_assessment.assess_risk once per tick and fans its single
     result out to every display that depends on it — the map, top bar,
     readings/rule-eval panels, the sensor tabs' status dots, and the event
@@ -1090,16 +1195,61 @@ def update_risk_fanout(sim_step, selected_sensor, active_events_raw, log_entries
     Input: the tab highlight and the map ring are therefore written in the
     same response, and can't disagree even for a frame.
 
-    Re-derives the injected reading frame the same way advance_replay does,
-    rather than reading a shared Store: a full DataFrame isn't something
-    worth round-tripping through JSON every tick, and apply_injections is
-    pure, so calling it again here with the same (already-pruned)
-    active_events is exactly as correct as sharing one result would be —
-    just a few extra microseconds of pandas filtering on a 10k-row frame.
+    Reads the injected frame through the shared memo rather than a Store: a
+    full DataFrame isn't worth round-tripping through JSON every tick, and
+    injected_readings is pure, so this and update_charts get the identical
+    frame for the tick without either of them owning it.
+
+    EVERY timestep is assessed, not just the one each tick lands on. Speed
+    is steps-per-tick (see TICK_MS), so at 8x the clock jumps 8 steps
+    between renders — and assessing only the landed step meant the rules
+    could sample straight over a short event. A convective storm's 6-step
+    envelope did exactly that at 8x: the chart drew the full spike (extendData
+    appends every skipped row) while the pins never escalated and nothing
+    logged. Sweeping the gap makes the LOGIC speed-independent — escalations,
+    edge-triggered logging and rate-of-rise now see an identical sequence of
+    timesteps at 1x and 8x. Rendering stays at tick rate: the landed step's
+    assessment is the one every display reads.
+
+    This is affordable because the expensive part of a tick was never
+    assess_risk (10.8ms at step 100, 16.4ms at step 862) but building the
+    frame it runs on. Each intermediate step reuses the frame already built
+    for the landed step, sliced with searchsorted (0.05ms) instead of
+    rebuilt (up to 9.5ms) — so the worst-case 8-step sweep costs ~132ms of
+    the 1000ms budget rather than ~207ms.
+
+    Reset clears the event log here. It has to be this callback — Dash
+    allows one callback per Output and this one owns event-log-store — and
+    it has to key off reset-token-store rather than "active_events is now
+    empty", which is indistinguishable from page load. Clearing
+    sensor-status-store alongside it is what stops the next tick logging a
+    phantom transition out of the state the cleared entries described:
+    _update_event_log treats an empty previous-categories dict as "no
+    history yet" and re-seeds silently.
     """
     active_events = events_from_store(active_events_raw)
-    visible = visible_readings(READINGS, TIMELINE, sim_step)
-    injected, _ = apply_injections(visible, TIMELINE, active_events, sim_step)
+    injected = injected_readings(sim_step, active_events)
+
+    reset_fired = any(t["prop_id"].startswith("reset-token-store") for t in ctx.triggered)
+    categories = {} if reset_fired else (previous_categories or {})
+    entries = [] if reset_fired else list(log_entries)
+
+    # Steps the clock passed through since the last assessment, exclusive of
+    # sim_step (assessed below as the landed step). Empty when nothing moved
+    # — a selection change or a re-fire on the same step re-renders without
+    # re-walking history — and empty on a loop wraparound, where sim_step is
+    # BEHIND last_assessed_step and the replay is starting over rather than
+    # continuing. The gap is bounded by the largest steps-per-tick (8),
+    # since sim_step accumulates from a Store and so can't run ahead when a
+    # response is dropped.
+    previous_step = -1 if reset_fired else (last_assessed_step if last_assessed_step is not None else -1)
+    timestamps = injected["timestamp"]
+    for step in range(previous_step + 1, sim_step):
+        # Slicing the frame already built for sim_step, NOT rebuilding it:
+        # rows are sorted by timestamp, so this is the same frame
+        # visible_readings would return for `step`.
+        upto = timestamps.searchsorted(TIMELINE[step], side="right")
+        categories, entries = _update_event_log(assess_risk(injected.iloc[:upto], SENSORS_META), categories, entries)
 
     assessment = assess_risk(injected, SENSORS_META)
 
@@ -1115,7 +1265,9 @@ def update_risk_fanout(sim_step, selected_sensor, active_events_raw, log_entries
     readings_panel = _render_current_readings(selected_assessment, rainfall_latest, soil_latest, soil_is_catchment)
     rule_eval_panel = _render_rule_eval(selected_assessment)
 
-    new_categories, new_log_entries = _update_event_log(assessment, previous_categories, log_entries)
+    # The landed step closes the sweep, so its transitions are logged the
+    # same way an intermediate step's are.
+    new_categories, new_log_entries = _update_event_log(assessment, categories, entries)
     event_log_display = _render_event_log(new_log_entries)
 
     active_events_display = _render_active_events(active_events, sim_step)
@@ -1131,6 +1283,7 @@ def update_risk_fanout(sim_step, selected_sensor, active_events_raw, log_entries
         event_log_display,
         new_log_entries,
         new_categories,
+        sim_step,
         active_events_display,
         top_bar_injector_slot,
     )
