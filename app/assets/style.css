@@ -527,8 +527,62 @@
     padding-bottom: 0;
 }
 
-.log-dot {
+/* One shape per event TYPE (not severity) — see main._log_marker for why
+   this is deliberately its own vocabulary rather than the status dot
+   reused elsewhere. */
+.log-marker {
     flex: 0 0 auto;
+    width: 9px;
+    height: 9px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* A small warning triangle, drawn with the border trick (no glyph, so it
+   scales cleanly at this size). Colour is inline per the stage that fired,
+   set via borderBottomColor — the one place this marker stays severity
+   graded, since "how severe" is still worth keeping within "a flood
+   happened". */
+.log-marker-confirmed {
+    width: 0;
+    height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-bottom: 8px solid;   /* colour set inline */
+}
+
+/* Flat grey square — deliberately NOT severity-coloured. A fault is a
+   data-quality flag, not a stage, and a stage colour here would missell it
+   as one. */
+.log-marker-fault {
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+    background-color: var(--ink-faint);
+}
+
+/* The calm/resolved case: a muted-green check rather than a shape. */
+.log-marker-normal {
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+    color: #7A9B76;
+}
+
+/* Marks a log line produced while an injected event was overlaying the
+   reading. Small and quiet — it only needs to be noticeable on the entries
+   that have it, never loud enough to compete with the verdict text. */
+.log-tag-injected {
+    flex: 0 0 auto;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: #e07b00;
+    border: 1px solid #f0c896;
+    border-radius: 3px;
+    padding: 0 3px;
+    line-height: 1.4;
 }
 
 .log-time {

@@ -1195,21 +1195,54 @@ def _sensor_category(sensor_assessment) -> str:
 _CATEGORY_LABELS = {"confirmed_flood": "Confirmed flood", "possible_fault": "Possible fault", "normal": "Normal"}
 
 
-def _log_dot_style(category: str, stage: str) -> dict:
-    """The leading type-icon for a log entry, drawn from the SAME _dot_style
-    the map pins, sensor tabs and legend use — so "amber dot" means the same
-    thing wherever it appears, and a possible_fault carries its dashed ring
-    here exactly as it does on the map. Confirmed floods take the severity
-    color of the stage that fired; a return to normal is always the Normal
-    green regardless of what it fell from."""
-    if category == "possible_fault":
-        return _dot_style(SEVERITY_COLORS.get(stage, NEUTRAL_PIN_COLOR), FAULT_STROKE_COLOR, dashed=True, size="7px")
+def _log_marker(category: str, stage: str) -> html.Span:
+    """The leading type-icon for a log entry.
+
+    Deliberately its OWN shape vocabulary, not a reuse of _dot_style (the map
+    pins/tabs/rule-verdict's status dot): the log is answering a different
+    question. A status dot says "what is this sensor's severity right now";
+    a log line says "what KIND of thing just happened" — the log previously
+    borrowed the severity dot for that, which conflated the two (a
+    possible_fault and a confirmed Watch looked like the same amber dot).
+
+    Shapes, one per event type, colour still severity-graded where that's
+    meaningful:
+      confirmed_flood — a small warning triangle, coloured by the stage that
+        fired (Watch's amber through Extreme's maroon), so "hot" still reads
+        as more severe within this one type.
+      possible_fault  — a small grey square. Deliberately NOT severity
+        coloured: a fault isn't a stage, it's a data-quality flag, and
+        giving it a stage colour would missell it as one.
+      normal          — a muted-green check, the calm/resolved case.
+    """
     if category == "confirmed_flood":
-        return _dot_style(SEVERITY_COLORS.get(stage, NEUTRAL_PIN_COLOR), size="7px")
-    return _dot_style(SEVERITY_COLORS["Normal"], size="7px")
+        return html.Span(
+            className="log-marker log-marker-confirmed",
+            style={"borderBottomColor": SEVERITY_COLORS.get(stage, NEUTRAL_PIN_COLOR)},
+        )
+    if category == "possible_fault":
+        return html.Span(className="log-marker log-marker-fault")
+    return html.Span("✓", className="log-marker log-marker-normal")
 
 
-def _update_event_log(assessment, previous_categories: dict, log_entries: list) -> tuple[dict, list]:
+def _sensor_row_is_injected(readings_df, sensor_id: str, timestamp) -> bool:
+    """Whether ANY row for this sensor at this exact timestamp carries the
+    `injected` flag apply_injections stamps — water_level or
+    rainfall_intensity, whichever the active event actually touched. Used
+    only to tag a log line as synthetic; it never feeds assess_risk, which
+    reads the same overlaid readings as if they were real (CLAUDE.md's
+    injector separation)."""
+    if "injected" not in readings_df.columns:
+        return False
+    mask = (
+        (readings_df["sensor_id"] == sensor_id)
+        & (readings_df["timestamp"] == timestamp)
+        & readings_df["injected"]
+    )
+    return bool(mask.any())
+
+
+def _update_event_log(assessment, readings_df, previous_categories: dict, log_entries: list) -> tuple[dict, list]:
     """Edge-triggered per CLAUDE.md: append a log line only when a sensor's
     category (confirmed_flood/possible_fault/normal) actually changes from
     the previous tick, never on every tick. An empty `previous_categories`
@@ -1217,12 +1250,18 @@ def _update_event_log(assessment, previous_categories: dict, log_entries: list) 
     every sensor's initial state as a fake "transition".
 
     Entries are stored as dicts, not preformatted strings: the renderer needs
-    the category and stage separately to pick the entry's dot color, and the
+    the category and stage separately to pick the entry's marker, and the
     store is internal to this app so its shape is ours to choose. Only what
     the entry displays is kept — when, which sensor, what it became. The
     previous state is dropped (the line above it in the log already says
     what it was) and so is the water_level value, which restated a number
     the stat tiles and charts were already showing.
+
+    `readings_df` is the SAME overlaid frame `assessment` was computed from
+    (the caller's `injected.iloc[:upto]` slice mid-sweep, or the full
+    `injected` frame at the landed step) — passed through only so a
+    transitioning entry can be tagged `injected`, once an event is real data
+    and this tagging stops applying to anything.
     """
     current_categories = {sid: _sensor_category(sa) for sid, sa in assessment.sensors.items()}
     is_first_run = not previous_categories
@@ -1239,6 +1278,7 @@ def _update_event_log(assessment, previous_categories: dict, log_entries: list) 
                         "sensor": sensor_id,
                         "category": category,
                         "stage": sa.threshold_state,
+                        "injected": _sensor_row_is_injected(readings_df, sensor_id, sa.latest_timestamp),
                     }
                 )
 
@@ -1254,9 +1294,14 @@ def _render_event_log(log_entries: list) -> html.Div:
             html.Div(
                 className="log-entry",
                 children=[
-                    html.Span(className="log-dot", style=_log_dot_style(entry["category"], entry["stage"])),
+                    _log_marker(entry["category"], entry["stage"]),
                     html.Span(entry["time"], className="log-time"),
                     html.Span(entry["sensor"], className="log-sensor"),
+                    # Only present on entries produced while an injected
+                    # event was overlaying the reading — a real reading
+                    # never gets this tag. Once Ano's real data lands and
+                    # nothing is injected, this tag simply never appears.
+                    *([html.Span("SIM", className="log-tag-injected")] if entry.get("injected") else []),
                     html.Span(_CATEGORY_LABELS[entry["category"]], className="log-state"),
                 ],
             )
@@ -1364,7 +1409,8 @@ def update_risk_fanout(
         # rows are sorted by timestamp, so this is the same frame
         # visible_readings would return for `step`.
         upto = timestamps.searchsorted(TIMELINE[step], side="right")
-        categories, entries = _update_event_log(assess_risk(injected.iloc[:upto], SENSORS_META), categories, entries)
+        step_readings = injected.iloc[:upto]
+        categories, entries = _update_event_log(assess_risk(step_readings, SENSORS_META), step_readings, categories, entries)
 
     assessment = assess_risk(injected, SENSORS_META)
 
@@ -1382,7 +1428,7 @@ def update_risk_fanout(
 
     # The landed step closes the sweep, so its transitions are logged the
     # same way an intermediate step's are.
-    new_categories, new_log_entries = _update_event_log(assessment, categories, entries)
+    new_categories, new_log_entries = _update_event_log(assessment, injected, categories, entries)
     event_log_display = _render_event_log(new_log_entries)
 
     top_bar_injector_slot = _render_top_bar_injector_slot(active_events)
