@@ -360,35 +360,40 @@
 /* Spacing above the pair comes from the .left-section wrapper, so the slots
    only own their heights and the small gap between the two figures. */
 .chart-slot {
-    height: 305px;
+    height: 280px;
 }
 
 .chart-slot-short {
     height: 225px;
-    margin-top: 6px;
+    margin-top: 14px;
 }
 
 /* The ČHMÚ stage/value key for the water-level chart's threshold lines,
    replacing the fake zero-data Plotly traces that used to draw this as a
    chart legend. One row, small and muted — a key you consult, not a
-   reading. */
+   reading. Sitting between the two charts, ABOVE its own bottom border,
+   which is what doubles as the separator between them — no extra element
+   needed. */
 .chart-threshold-legend {
     display: flex;
-    flex-wrap: wrap;
-    gap: 4px 14px;
-    margin: 6px 0 0 8px;
+    flex-wrap: nowrap;
+    justify-content: space-between;
+    margin: 10px 0 0 0;
+    padding: 0 4px 12px 4px;
+    border-bottom: 1px solid var(--line-faint);
 }
 
 .chart-threshold-legend-item {
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: 4px;
     font-size: 10px;
     color: var(--ink-faint);
 }
 
 .chart-threshold-legend-name {
-    font-weight: 500;
+    font-weight: 600;
+    color: var(--ink-muted);
 }
 
 .chart-threshold-legend-line {
@@ -689,11 +694,13 @@
     min-height: 32px;
 }
 
-/* The selected-value text and the trigger area */
+/* The selected-value text and the trigger area. Only the two injector
+   dropdowns (scenario, target sensor) use dcc.Dropdown anywhere in the app,
+   so this rule is already scoped to them in practice. */
 .dash-dropdown-trigger,
 .dash-dropdown-focus-target,
 .dash-dropdown {
-    font-size: 12px;
+    font-size: 11px;
 }
 
 /* The whole wrapper — controls outer spacing */
