@@ -74,12 +74,19 @@ def _base_layout(title: str) -> dict:
         # Left/bottom stay small because automargin grows them to fit the
         # tick labels; the top leaves room for the title.
         margin=dict(l=8, r=12, t=44, b=5),
+        # rainfall's injected bar trace needs to draw directly on top of the
+        # real bar at the same x, not offset beside it — Plotly's default
+        # "group" barmode would put same-x bars from two traces side by
+        # side, halving each one's width instead of one replacing the
+        # other's colour. Harmless on the water-level figure, which has no
+        # bar traces at all.
+        barmode="overlay",
         # Explicit rather than left to Plotly's default: with the threshold
         # proxy traces gone, "simulated event" is the only showlegend=True
         # trace left, and Plotly.js hides the legend entirely when fewer
         # than two traces are legend-eligible unless told otherwise — which
-        # would silently drop the one label that explains the diamond
-        # marker's meaning.
+        # would silently drop the one label that explains the injected
+        # line/bar colour's meaning.
         showlegend=True,
         legend=dict(
             orientation="h",
@@ -120,17 +127,47 @@ def _apply_axis_style(fig: go.Figure) -> None:
     fig.update_yaxes(**axis_style)
 
 
-def _injected_marker_trace() -> go.Scatter:
+def _injected_line_trace() -> go.Scatter:
     """Always present (even with empty data) so the trace list — and thus
     the figure's structure — never changes shape between an uninjected and
     an injected tick; only in-place data updates are ever needed after the
-    initial build."""
+    initial build.
+
+    Draws the injected SEGMENT of the water-level line in injected-orange,
+    directly over the real line, rather than marking it with a diamond. This
+    works with no change to the extendData contract at all: `apply_injections`
+    already overlays the modified value into the same `value` column the
+    real (trace 0) line reads, so trace 0's blue line already passes through
+    the exact same y-values at every injected timestamp. This trace draws
+    only the injected-flagged subset of points — update_water_level_figure
+    was already computing that exact subset for the old diamond markers — as
+    a LINE instead of markers, in orange, layered on top of (drawn after)
+    trace 0. Where it has data, it visually replaces the blue segment
+    beneath it; everywhere else, trace 0 shows through unchanged. Since it
+    stops exactly where the `injected` flag stops, the boundary between real
+    and synthetic is sharp — a visual-honesty requirement, not a bug to
+    smooth over with interpolation.
+    """
     return go.Scatter(
         x=[],
         y=[],
-        mode="markers",
+        mode="lines",
         name="simulated event",
-        marker=dict(color=INJECTED_MARKER_COLOR, size=8, symbol="diamond", line=dict(color="#7a4200", width=1)),
+        line=dict(color=INJECTED_MARKER_COLOR, width=3),
+        showlegend=True,
+    )
+
+
+def _injected_bar_trace() -> go.Bar:
+    """The rainfall-chart equivalent of _injected_line_trace: the injected
+    subset of bars, redrawn in injected-orange directly over the real bars
+    (via `barmode="overlay"` in _base_layout) rather than marked with a
+    diamond above them."""
+    return go.Bar(
+        x=[],
+        y=[],
+        name="simulated event",
+        marker_color=INJECTED_MARKER_COLOR,
         showlegend=True,
     )
 
@@ -195,7 +232,7 @@ def build_water_level_figure(sensor_id: str, x_range=None) -> go.Figure:
             showlegend=False,
         )
     )
-    fig.add_trace(_injected_marker_trace())
+    fig.add_trace(_injected_line_trace())
 
     # Solid, unlabelled threshold lines (the reference draws them this way);
     # each one's name and value are carried by the HTML legend main.py
@@ -237,7 +274,7 @@ def build_rainfall_figure(sensor_id: str, x_range=None) -> go.Figure:
     fig.add_trace(
         go.Bar(x=[], y=[], name="rainfall_intensity", marker_color=RAINFALL_COLOR, showlegend=False)
     )
-    fig.add_trace(_injected_marker_trace())
+    fig.add_trace(_injected_bar_trace())
 
     fig.update_layout(**_base_layout(f"{sensor_id} — Rainfall in mm/h"))
     _apply_axis_style(fig)

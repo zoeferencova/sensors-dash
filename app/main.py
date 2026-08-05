@@ -941,12 +941,13 @@ def update_charts(sim_step, selected_sensor, active_events_raw, chart_state):
     new_rainfall = rainfall_series[rainfall_series["timestamp"] > cutoff]
 
     # Trace 0 (main line/bar) always gets the new point(s); trace 1 (the
-    # "simulated event" diamond overlay) gets only whichever of those are
-    # flagged injected — possibly none, a harmless empty extend for that
-    # trace. Without this, only the very first point of a multi-tick
-    # injected event (sent by the full-rebuild that fires on trigger) would
-    # ever show the marker; later ticks during the same event would raise
-    # the line correctly but silently drop the "this is simulated" flag.
+    # injected-orange overlay that recolors the injected segment directly on
+    # the line/bars) gets only whichever of those are flagged injected —
+    # possibly none, a harmless empty extend for that trace. Without this,
+    # only the very first point of a multi-tick injected event (sent by the
+    # full-rebuild that fires on trigger) would ever be recolored; later
+    # ticks during the same event would raise the line/bars correctly but
+    # silently drop the "this is simulated" colouring.
     new_water_level_injected = charts.injected_points(new_water_level)
     new_rainfall_injected = charts.injected_points(new_rainfall)
 
