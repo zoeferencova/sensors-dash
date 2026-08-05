@@ -499,6 +499,11 @@ app.layout = html.Div(
         dcc.Store(id="reset-token-store", data=0),
         # Append-only log entries (dicts), newest kept up to MAX_LOG_ENTRIES.
         dcc.Store(id="event-log-store", data=[]),
+        # Highest timestep assess_risk has already been run for. The gap
+        # between it and the new sim_step is what update_risk_fanout sweeps,
+        # so a tick that advances 8 steps still evaluates all 8. -1 means
+        # "nothing assessed yet" (page load).
+        dcc.Store(id="last-assessed-step-store", data=-1),
         # Previous tick's per-sensor category (confirmed_flood/possible_fault/
         # normal) — used only to detect transitions for the event log; never
         # displayed directly. Empty dict means "no history yet" (page load).
@@ -1165,6 +1170,7 @@ def _render_top_bar_injector_slot(active_events: list) -> str:
     Output("event-log-content", "children"),
     Output("event-log-store", "data"),
     Output("sensor-status-store", "data"),
+    Output("last-assessed-step-store", "data"),
     Output("injector-active-events-display", "children"),
     Output("top-bar-injector-slot", "children"),
     Input("sim-step-store", "data"),
@@ -1173,8 +1179,11 @@ def _render_top_bar_injector_slot(active_events: list) -> str:
     Input("reset-token-store", "data"),
     State("event-log-store", "data"),
     State("sensor-status-store", "data"),
+    State("last-assessed-step-store", "data"),
 )
-def update_risk_fanout(sim_step, selected_sensor, active_events_raw, _reset_token, log_entries, previous_categories):
+def update_risk_fanout(
+    sim_step, selected_sensor, active_events_raw, _reset_token, log_entries, previous_categories, last_assessed_step
+):
     """Runs risk_assessment.assess_risk once per tick and fans its single
     result out to every display that depends on it — the map, top bar,
     readings/rule-eval panels, the sensor tabs' status dots, and the event
@@ -1191,6 +1200,24 @@ def update_risk_fanout(sim_step, selected_sensor, active_events_raw, _reset_toke
     injected_readings is pure, so this and update_charts get the identical
     frame for the tick without either of them owning it.
 
+    EVERY timestep is assessed, not just the one each tick lands on. Speed
+    is steps-per-tick (see TICK_MS), so at 8x the clock jumps 8 steps
+    between renders — and assessing only the landed step meant the rules
+    could sample straight over a short event. A convective storm's 6-step
+    envelope did exactly that at 8x: the chart drew the full spike (extendData
+    appends every skipped row) while the pins never escalated and nothing
+    logged. Sweeping the gap makes the LOGIC speed-independent — escalations,
+    edge-triggered logging and rate-of-rise now see an identical sequence of
+    timesteps at 1x and 8x. Rendering stays at tick rate: the landed step's
+    assessment is the one every display reads.
+
+    This is affordable because the expensive part of a tick was never
+    assess_risk (10.8ms at step 100, 16.4ms at step 862) but building the
+    frame it runs on. Each intermediate step reuses the frame already built
+    for the landed step, sliced with searchsorted (0.05ms) instead of
+    rebuilt (up to 9.5ms) — so the worst-case 8-step sweep costs ~132ms of
+    the 1000ms budget rather than ~207ms.
+
     Reset clears the event log here. It has to be this callback — Dash
     allows one callback per Output and this one owns event-log-store — and
     it has to key off reset-token-store rather than "active_events is now
@@ -1202,6 +1229,27 @@ def update_risk_fanout(sim_step, selected_sensor, active_events_raw, _reset_toke
     """
     active_events = events_from_store(active_events_raw)
     injected = injected_readings(sim_step, active_events)
+
+    reset_fired = any(t["prop_id"].startswith("reset-token-store") for t in ctx.triggered)
+    categories = {} if reset_fired else (previous_categories or {})
+    entries = [] if reset_fired else list(log_entries)
+
+    # Steps the clock passed through since the last assessment, exclusive of
+    # sim_step (assessed below as the landed step). Empty when nothing moved
+    # — a selection change or a re-fire on the same step re-renders without
+    # re-walking history — and empty on a loop wraparound, where sim_step is
+    # BEHIND last_assessed_step and the replay is starting over rather than
+    # continuing. The gap is bounded by the largest steps-per-tick (8),
+    # since sim_step accumulates from a Store and so can't run ahead when a
+    # response is dropped.
+    previous_step = -1 if reset_fired else (last_assessed_step if last_assessed_step is not None else -1)
+    timestamps = injected["timestamp"]
+    for step in range(previous_step + 1, sim_step):
+        # Slicing the frame already built for sim_step, NOT rebuilding it:
+        # rows are sorted by timestamp, so this is the same frame
+        # visible_readings would return for `step`.
+        upto = timestamps.searchsorted(TIMELINE[step], side="right")
+        categories, entries = _update_event_log(assess_risk(injected.iloc[:upto], SENSORS_META), categories, entries)
 
     assessment = assess_risk(injected, SENSORS_META)
 
@@ -1217,11 +1265,9 @@ def update_risk_fanout(sim_step, selected_sensor, active_events_raw, _reset_toke
     readings_panel = _render_current_readings(selected_assessment, rainfall_latest, soil_latest, soil_is_catchment)
     rule_eval_panel = _render_rule_eval(selected_assessment)
 
-    reset_fired = any(t["prop_id"].startswith("reset-token-store") for t in ctx.triggered)
-    if reset_fired:
-        new_categories, new_log_entries = {}, []
-    else:
-        new_categories, new_log_entries = _update_event_log(assessment, previous_categories, log_entries)
+    # The landed step closes the sweep, so its transitions are logged the
+    # same way an intermediate step's are.
+    new_categories, new_log_entries = _update_event_log(assessment, categories, entries)
     event_log_display = _render_event_log(new_log_entries)
 
     active_events_display = _render_active_events(active_events, sim_step)
@@ -1237,6 +1283,7 @@ def update_risk_fanout(sim_step, selected_sensor, active_events_raw, _reset_toke
         event_log_display,
         new_log_entries,
         new_categories,
+        sim_step,
         active_events_display,
         top_bar_injector_slot,
     )
