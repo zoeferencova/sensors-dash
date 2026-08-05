@@ -201,6 +201,23 @@ def build_event(scenario: str, target_sensor: str | None, magnitude: float, trig
     return InjectedEvent(scenario, target_sensor, magnitude, trigger_step, deltas)
 
 
+def _still_active(event: InjectedEvent, sim_step: int) -> bool:
+    return sim_step - event.trigger_step <= event.duration
+
+
+def prune_events(active_events: list, sim_step: int) -> list:
+    """The subset of `active_events` that hasn't expired by `sim_step`.
+
+    Exactly the expiry test apply_injections applies while it blends, split
+    out so a caller that only wants the pruned list doesn't have to build
+    the injected frame to get it. The replay tick is that caller: it was
+    copying the entire visible-readings frame every step purely to read this
+    list back off the second return value, which made the tick slow enough
+    to be superseded by the following tick at anything above 1x speed.
+    """
+    return [event for event in active_events if _still_active(event, sim_step)]
+
+
 def apply_injections(
     df: pd.DataFrame, timeline: list, active_events: list, sim_step: int
 ) -> tuple[pd.DataFrame, list]:
@@ -240,7 +257,7 @@ def apply_injections(
                 result.loc[active_mask, "value"] = result.loc[active_mask, "value"] + factor[active_mask] * delta.peak
             result.loc[active_mask, "injected"] = True
 
-        if sim_step - event.trigger_step <= event.duration:
+        if _still_active(event, sim_step):
             still_active.append(event)
 
     return result, still_active
