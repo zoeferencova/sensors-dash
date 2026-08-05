@@ -22,14 +22,24 @@ its raw (unconfirmed) severity would otherwise be — same fill so you can
 still see how high it's reading, but the ring marks it as unconfirmed
 rather than a real, escalated flood signal."""
 
-SELECTED_RING_COLOR = "#1a73e8"
+SELECTED_RING_COLOR = "#3d5a73"
 SELECTED_RING_RADIUS = 16
 """The currently-selected sensor gets a solid accent halo drawn AROUND its
 pin — a separate, larger, unfilled CircleMarker rather than a stroke on the
 pin itself, so it can't be confused with the dashed possible_fault ring (a
 sensor can be both selected and faulted at once, and both must stay
 readable). The color is deliberately outside the SEVERITY_COLORS palette:
-it says "this is what you're looking at", not "this is how bad it is"."""
+it says "this is what you're looking at", not "this is how bad it is". It
+is the same steel-blue the dashboard uses for every other selected/active
+control (.sensor-tab-selected, .btn-primary), kept dark enough to separate
+clearly from the much lighter REACH_LINE_COLOR it sits on top of."""
+
+REACH_LINE_COLOR = "#98a4ae"
+"""The Botič reach itself. Deliberately a neutral grey-slate with no hue of
+its own: it is the one thing on the map that never changes state, so it
+must not compete with the severity-coloured pins sitting on it. An earlier
+muted blue read as "another status colour" and made the pins hard to pick
+out against it."""
 
 
 def marker_id(sensor_id: str) -> dict:
@@ -121,12 +131,25 @@ def build_markers(
     return markers
 
 
+RIGHT_PANEL_WIDTH_PX = 300
+"""Mirrors .right-panel's width in assets/style.css. That panel floats OVER
+the map, so the map is wider than its visible area and a plain bounds-fit
+would centre the reach under the panel — putting the easternmost sensor
+(S01) behind the injector card. Reserved as fitBounds padding below."""
+
+
 def build_map(sensors_meta: list[dict]) -> dl.Map:
     """Centered on the reach via bounds-fit rather than a fixed zoom: the
     four sensors span the reach mostly east-west, while the map panel is
     portrait, so a fixed center+zoom leaves some pins outside the viewport.
     Fitting to padded bounds guarantees all four are visible regardless of
-    the panel's aspect ratio."""
+    the panel's aspect ratio.
+
+    `boundsOptions.paddingBottomRight` keeps the fit clear of the floating
+    right panel. Doing it in pixels rather than by inflating the degree
+    padding below is what makes it exact — the reserved strip is the panel's
+    real width, not a guess that drifts with zoom or aspect ratio.
+    """
     lats = [s["lat"] for s in sensors_meta]
     lons = [s["lon"] for s in sensors_meta]
     padding = 0.01  # degrees, keeps pins off the very edge
@@ -137,6 +160,7 @@ def build_map(sensors_meta: list[dict]) -> dl.Map:
 
     return dl.Map(
         bounds=bounds,
+        boundsOptions={"paddingBottomRight": [RIGHT_PANEL_WIDTH_PX, 0]},
         style={"height": "100%", "width": "100%"},
         children=[
             dl.TileLayer(
@@ -145,9 +169,9 @@ def build_map(sensors_meta: list[dict]) -> dl.Map:
             ),
             dl.Polyline(
                 positions=BOTIC_REACH,
-                color="#4A7A96",     # muted blue to fit your palette
+                color=REACH_LINE_COLOR,
                 weight=4,
-                opacity=0.6,
+                opacity=0.85,
             ),
             dl.LayerGroup(id=MARKER_LAYER_ID, children=build_markers(sensors_meta)),
         ],

@@ -15,9 +15,17 @@ import plotly.graph_objects as go
 
 from constants import SEVERITY_COLORS, THRESHOLDS
 
+# Trace colors are drawn from the dashboard's own steel-blue accent family
+# (the same --steel that styles the selected tab, the primary buttons and
+# the map's selection ring) rather than the stock plotly blues they started
+# as, so a chart reads as part of the panel it sits in. Both stay clear of
+# SEVERITY_COLORS: a trace's color must never look like a risk state, since
+# the threshold lines crossing it are exactly that.
+WATER_LEVEL_COLOR = "#3d5a73"
+RAINFALL_COLOR = "#8ba4b8"
+# The one deliberate exception: injected points must read as "this is not
+# real data", so they keep a warm accent that nothing else on the page uses.
 INJECTED_MARKER_COLOR = "#e07b00"
-WATER_LEVEL_COLOR = "#1f4e79"
-RAINFALL_COLOR = "#4c72b0"
 
 # --- Visual language ------------------------------------------------------
 # Modelled on Google Flood Hub's discharge panel (the layout reference in

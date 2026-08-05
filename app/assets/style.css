@@ -31,7 +31,9 @@
     background-color: var(--canvas);
 }
 
+/* position: relative anchors the floating right panel below. */
 .body-row {
+    position: relative;
     display: flex;
     flex: 1 1 auto;
     min-height: 0;
@@ -59,16 +61,29 @@
     min-width: 0;
 }
 
+/* Floats OVER the map (Flood Hub style) rather than sitting beside it: the
+   map panel now spans the full width right of the left panel, and only the
+   cards inside this container are opaque — the gutter between and around
+   them is transparent, so the basemap shows through. z-index clears
+   Leaflet's own stacking (panes 400, controls 800). */
 .right-panel {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1000;
     width: 300px;
-    flex: 0 0 300px;
     display: flex;
     flex-direction: column;
     gap: 12px;
-    min-height: 0;
     overflow-y: auto;
     padding: 12px;
-    background-color: var(--canvas);
+    background-color: transparent;
+}
+
+/* Keep the OSM/CARTO attribution out from under the floating panel. */
+.leaflet-bottom.leaflet-right {
+    right: 300px;
 }
 
 /* ---- Top bar ---------------------------------------------------------- */
@@ -77,7 +92,7 @@
     align-items: center;
     justify-content: space-between;   /* spreads the three zones apart */
     gap: 24px;
-    padding: 4px 16px 13px 16px;
+    padding: 10px 16px;   /* even top and bottom */
     background-color: var(--surface);
     border-bottom: 1px solid var(--line);
 }
@@ -142,25 +157,34 @@
 }
 
 /* ---- Section headings ------------------------------------------------- */
-/* Left panel uses small uppercase labels; the right panel's cards use
-   .card-title. Both are quiet — the data is what should carry weight. */
+/* Two levels, shared by both panels:
+   .section-label — titlecase section/card heading ("Sensor Status",
+     "Event injector", "Event log", "Legend").
+   .field-label + .sub-label — the smaller label the form controls already
+     use ("Scenario", "Target sensor"), reused for sub-headings inside a
+     section ("Current readings", "All sensors", "Rule evaluation").
+   The left panel's old uppercase letterspaced headings shouted louder than
+   the right panel's card titles; matching them is most of what stops the
+   left side reading as cluttered. */
 .section-label {
-    font-size: 11px;
+    font-size: 13px;
     font-weight: 600;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--ink-faint);
-    margin: 16px 0 8px 0;
+    color: var(--ink);
+    margin: 18px 0 8px 0;
 }
 
 .left-panel-top > .section-label:first-child {
     margin-top: 2px;
 }
 
+/* A .field-label heading a block rather than sitting on a control needs
+   room above it. */
+.sub-label {
+    margin-top: 12px;
+}
+
+/* Card titles are the same label, minus the stacking margin. */
 .card-title {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--ink);
     margin: 0 0 10px 0;
 }
 
@@ -182,11 +206,15 @@
 }
 
 /* ---- Right panel cards ------------------------------------------------ */
+/* The only opaque surfaces in the right panel — everything around them is
+   transparent to the map, so each card needs its own edge and a soft lift
+   to sit convincingly above the basemap. */
 .panel-card {
     background-color: var(--surface);
     border: 1px solid var(--line);
     border-radius: 8px;
     padding: 12px 14px;
+    box-shadow: 0 1px 4px rgba(44, 62, 80, 0.10);
 }
 
 /* ---- Sensor tabs (status display + sensor selector in one control) ---- */
@@ -237,9 +265,13 @@
 }
 
 /* ---- Current-readings stat tiles -------------------------------------- */
+/* Three identical readouts on a very light grey fill — no border, and no
+   emphasised variant: water level is no longer larger, and its number is no
+   longer severity-coloured (the chart's threshold lines, the status dots
+   and the map pins all already say what stage it is). */
 .stat-row {
     display: flex;
-    gap: 8px;
+    gap: 6px;
 }
 
 .stat-box {
@@ -247,27 +279,20 @@
     min-width: 0;
     padding: 8px 10px;
     background-color: var(--surface-sunk);
-    border: 1px solid var(--line-faint);
+    border: none;
     border-radius: 6px;
 }
 
 .stat-value {
-    font-size: 17px;
-    font-weight: 600;
-    line-height: 1.15;
+    font-size: 18px;
+    font-weight: 500;
+    line-height: 1.2;
     color: var(--ink);
     font-variant-numeric: tabular-nums;
 }
 
-/* Water level is the headline reading — bigger, and its colour is set
-   inline per ČHMÚ stage by update_risk_fanout. */
-.stat-box-primary .stat-value {
-    font-size: 22px;
-    font-weight: 700;
-}
-
 .stat-label {
-    margin-top: 3px;
+    margin-top: 2px;
     font-size: 10px;
     letter-spacing: 0.02em;
     color: var(--ink-faint);
@@ -287,44 +312,102 @@
    Water level gets the taller slot — it's the reading with four threshold
    lines to separate. */
 .chart-slot {
-    height: 310px;
+    height: 305px;
     margin-top: 10px;
 }
 
 .chart-slot-short {
-    height: 240px;
+    height: 225px;
     margin-top: 0;
 }
 
 /* ---- Rule-evaluation accordion ---------------------------------------- */
+/* Open by default (set on the Details component), so no top border is
+   needed to fence it off — the label plus whitespace is the separation. */
 .rule-eval {
-    margin-top: 10px;
-    padding-top: 10px;
-    border-top: 1px solid var(--line-faint);
+    margin-top: 4px;
 }
 
+/* list-item, not .field-label's block, so the disclosure triangle survives. */
 .rule-eval-summary {
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--ink-faint);
+    display: list-item;
     cursor: pointer;
+    margin-bottom: 4px;
 }
 
 .rule-eval-body {
-    margin-top: 8px;
+    margin-top: 2px;
+}
+
+/* One condition: name on the left, state pill hard right, so the pills form
+   a scannable column. */
+.rule-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 4px 0;
     font-size: 12px;
     color: var(--ink-muted);
 }
 
-.rule-eval-body > div {
-    margin-bottom: 3px;
+.rule-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Filled = the condition fired, outlined = it didn't. Same filled-vs-outline
+   language the map uses for a confirmed pin versus a dashed unconfirmed
+   one, and no ✓/✗ glyphs, which never matched the type. */
+.rule-pill {
+    flex: 0 0 auto;
+    min-width: 34px;
+    padding: 2px 9px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    text-align: center;
+    line-height: 1.5;
+}
+
+.rule-pill-on {
+    background-color: var(--steel);
+    border: 1px solid var(--steel);
+    color: #fff;
+}
+
+.rule-pill-off {
+    background-color: transparent;
+    border: 1px solid #dde3e8;
+    color: var(--ink-faint);
 }
 
 .rule-verdict {
-    margin-top: 6px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    padding-top: 9px;
+    border-top: 1px solid var(--line-faint);
+}
+
+.rule-verdict-dot {
+    flex: 0 0 auto;
+}
+
+.rule-verdict-text {
+    font-size: 12px;
+    font-weight: 600;
     color: var(--ink);
+}
+
+.rule-empty {
+    font-size: 12px;
+    color: var(--ink-faint);
 }
 
 /* ---- Event log -------------------------------------------------------- */

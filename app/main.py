@@ -115,17 +115,19 @@ def _dot_style(fill: str, ring_color: str | None = None, dashed: bool = False, s
     }
 
 
-def _status_dot_style(sensor_assessment) -> dict:
+def _status_dot_style(sensor_assessment, size: str = "9px") -> dict:
     """The dot for one sensor, derived from its assessment by the same
     fill/ring rules sensor_map._marker_style applies to that sensor's pin —
-    so a tab and its map pin can never disagree about what a sensor is
-    doing. No assessment yet falls back to the same neutral color the map
-    uses before the first fanout."""
+    so a tab, the status row, the rule verdict and its map pin can never
+    disagree about what a sensor is doing. No assessment yet falls back to
+    the same neutral color the map uses before the first fanout."""
     if sensor_assessment is None:
-        return _dot_style(NEUTRAL_PIN_COLOR)
+        return _dot_style(NEUTRAL_PIN_COLOR, size=size)
     if sensor_assessment.possible_fault:
-        return _dot_style(SEVERITY_COLORS[sensor_assessment.threshold_state], FAULT_STROKE_COLOR, dashed=True)
-    return _dot_style(SEVERITY_COLORS[sensor_assessment.effective_state])
+        return _dot_style(
+            SEVERITY_COLORS[sensor_assessment.threshold_state], FAULT_STROKE_COLOR, dashed=True, size=size
+        )
+    return _dot_style(SEVERITY_COLORS[sensor_assessment.effective_state], size=size)
 
 
 def _tab_class(sensor_id: str, selected_sensor: str) -> str:
@@ -220,12 +222,16 @@ left_panel_top = html.Div(
     id="left-panel-top",
     className="left-panel-top",
     children=[
-        html.Div("Sensor status", className="section-label"),
+        html.Div("Sensor Status", className="section-label"),
         html.Div(id="sensor-tabs", className="sensor-tabs", children=build_sensor_tabs(DEFAULT_SENSOR)),
         # Readings sit ABOVE the charts: they're the "what is it right now"
         # answer, and the charts are the supporting history. The panel's own
         # children are rendered per tick by update_risk_fanout.
-        html.Div("Current readings", className="section-label"),
+        #
+        # Sub-headings inside a section use the same small label the form
+        # controls do ("Scenario", "Target sensor"), so the left panel has
+        # the same two-level heading hierarchy as the right one.
+        html.Div("Current readings", className="field-label sub-label"),
         html.Div(id="current-readings-panel"),
         # A real (if empty) Figure rather than {} — Plotly.js otherwise logs
         # a harmless but noisy "doesn't yet have a plot" warning on first
@@ -256,8 +262,12 @@ left_panel_top = html.Div(
         html.Details(
             id="rule-eval-accordion",
             className="rule-eval",
+            # Open by default — it's the panel that shows WHY the system
+            # reached its verdict, which is the point of the whole rule
+            # engine; hiding it behind a click undersells it.
+            open=True,
             children=[
-                html.Summary("Rule evaluation", className="rule-eval-summary"),
+                html.Summary("Rule evaluation", className="field-label sub-label rule-eval-summary"),
                 html.Div(id="rule-eval-panel", className="rule-eval-body"),
             ],
         ),
@@ -281,7 +291,7 @@ injector_panel = html.Div(
         html.Div(
             className="card-title-row",
             children=[
-                html.H4("Event injector", className="card-title"),
+                html.H4("Event injector", className="section-label card-title"),
                 # title= renders as the browser's native tooltip on hover —
                 # no dbc dependency and no callback needed for what is
                 # purely explanatory text.
@@ -342,7 +352,7 @@ legend_panel = html.Div(
     id="status-legend",
     className="panel-card",
     children=[
-        html.H4("Legend", className="card-title"),
+        html.H4("Legend", className="section-label card-title"),
         # A grid rather than a stack: six one-line entries in a single column
         # made this card taller than the log above it, for no gain — two
         # columns halve its height and keep every label on one line.
@@ -368,7 +378,7 @@ event_log_placeholder = html.Div(
     id="event-log-placeholder",
     className="panel-card",
     children=[
-        html.H4("Event log", className="card-title"),
+        html.H4("Event log", className="section-label card-title"),
         html.Div(id="event-log-content"),
     ],
 )
@@ -825,31 +835,32 @@ def _render_overall_risk(overall_state: str) -> html.Span:
     )
 
 
-def _stat_box(value: str, label: str, primary: bool = False, value_style: dict | None = None, hint: str | None = None):
-    """One stat tile: big number over a small muted label.
+def _stat_box(value: str, label: str, hint: str | None = None):
+    """One stat tile: a number over a small muted label.
 
-    `value_style` is the escape hatch for the only genuinely dynamic bit of
-    styling here — the water-level number's severity color, which
-    update_risk_fanout recomputes every tick. Everything else is class-driven.
+    All three tiles are identical — no emphasised variant and no severity
+    colour on the number. Water level's stage is already carried by the
+    threshold lines on the chart below, the status dots, and the map; a
+    fourth encoding of it here only added weight to a panel that needed
+    less. Separation is whitespace, not borders.
     """
-    box_class = "stat-box stat-box-primary" if primary else "stat-box"
     return html.Div(
-        className=box_class,
+        className="stat-box",
         title=hint,
         children=[
-            html.Div(value, className="stat-value", style=value_style or {}),
+            html.Div(value, className="stat-value"),
             html.Div(label, className="stat-label"),
         ],
     )
 
 
 def _render_current_readings(sensor_assessment, rainfall_latest, soil_latest, soil_is_catchment) -> html.Div:
-    """Three tiles: water level (prominent, colored by its ČHMÚ stage),
-    rainfall, soil moisture. The em dash is the no-data value so the tiles
-    keep their shape rather than collapsing when a series is missing.
+    """Three uniform tiles: water level, rainfall, soil moisture. The em dash
+    is the no-data value so the tiles keep their shape rather than collapsing
+    when a series is missing.
 
     Detail that used to be inline text — the rainfall "meaningful" flag and
-    the soil-moisture CATCHMENT fallback note — moves to the tile's `title`
+    the soil-moisture CATCHMENT fallback note — lives in the tile's `title`
     tooltip. Both are qualifiers on a number, and at this size the number
     has to stay the thing you read first.
     """
@@ -859,8 +870,6 @@ def _render_current_readings(sensor_assessment, rainfall_latest, soil_latest, so
     water_level = _stat_box(
         f"{sensor_assessment.latest_water_level:.1f}",
         "Water level cm",
-        primary=True,
-        value_style={"color": SEVERITY_COLORS[sensor_assessment.threshold_state]},
         hint=f"ČHMÚ stage: {sensor_assessment.threshold_state}",
     )
 
@@ -892,23 +901,53 @@ def _render_current_readings(sensor_assessment, rainfall_latest, soil_latest, so
     return html.Div(className="stat-row", children=[water_level, rainfall, soil])
 
 
+def _condition_row(label: str, met: bool) -> html.Div:
+    """One rule condition as a labelled state pill instead of a ✓/✗ glyph.
+
+    Filled (steel) reads as "this fired", outlined as "it didn't" — the same
+    filled-vs-outlined distinction the map already uses for a confirmed pin
+    versus a dashed unconfirmed one, so the two panels agree on what
+    "asserted" looks like.
+    """
+    return html.Div(
+        className="rule-row",
+        children=[
+            html.Span(label, className="rule-label"),
+            html.Span("yes" if met else "no", className=f"rule-pill rule-pill-{'on' if met else 'off'}"),
+        ],
+    )
+
+
 def _render_rule_eval(sensor_assessment) -> html.Div:
     """Body only — the "Rule evaluation" heading is the accordion's
-    <summary> in the static layout, so it must not be repeated here."""
+    <summary> in the static layout, so it must not be repeated here.
+
+    Condition names stay in the source's own snake_case (CLAUDE.md's
+    rule-panel spec names them that way, and so does assess_risk's
+    `conditions` dict) — the point of this panel is that you can read it
+    against the rules, so prettifying the identifiers would cost more than
+    it gains.
+    """
     if sensor_assessment is None:
-        return html.Div("No data yet.")
+        return html.Div("No data yet.", className="rule-empty")
 
     conditions = sensor_assessment.conditions
 
-    def mark(flag: bool) -> str:
-        return "✓" if flag else "✗"
-
     return html.Div(
         [
-            html.Div(f"water_level ≥ Watch: {mark(conditions['water_level_watch_plus'])}"),
-            html.Div(f"rising_fast: {mark(conditions['rising_fast'])}"),
-            html.Div(f"upstream_rain_confirmed: {mark(conditions['upstream_rain_confirmed'])}"),
-            html.Div(html.B(f"→ {_verdict_label(sensor_assessment)}"), className="rule-verdict"),
+            _condition_row("water_level ≥ Watch", conditions["water_level_watch_plus"]),
+            _condition_row("rising_fast", conditions["rising_fast"]),
+            _condition_row("upstream_rain_confirmed", conditions["upstream_rain_confirmed"]),
+            html.Div(
+                className="rule-verdict",
+                children=[
+                    # Same dot vocabulary as the tabs, status row, map pins and
+                    # log — a dashed ring here means possible_fault exactly as
+                    # it does everywhere else.
+                    html.Span(className="rule-verdict-dot", style=_status_dot_style(sensor_assessment, size="8px")),
+                    html.Span(_verdict_label(sensor_assessment), className="rule-verdict-text"),
+                ],
+            ),
         ]
     )
 
