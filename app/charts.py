@@ -62,14 +62,14 @@ def _base_layout(title: str) -> dict:
             xref="container",
             xanchor="left",
             pad=dict(l=6),
-            font=dict(size=13, color=TITLE_COLOR),
+            font=dict(size=13, color=TITLE_COLOR, weight=600),
         ),
         font=dict(family=FONT_FAMILY, size=11, color=AXIS_COLOR),
         plot_bgcolor="white",
         paper_bgcolor="white",
         # Left/bottom stay small because automargin grows them to fit the
         # tick labels; the top leaves room for the title.
-        margin=dict(l=8, r=12, t=44, b=8),
+        margin=dict(l=8, r=12, t=44, b=5),
         legend=dict(
             orientation="h",
             x=0,
