@@ -363,7 +363,12 @@ left_panel_top = html.Div(
                                     className="chart-threshold-legend-line",
                                     style={"backgroundColor": SEVERITY_COLORS[stage]},
                                 ),
-                                html.Span(f"{stage} {level}"),
+                                html.Span(
+                                    [
+                                        html.Span(stage, className="chart-threshold-legend-name"),
+                                        f" {level}",
+                                    ]
+                                ),
                             ],
                         )
                         for stage, level in THRESHOLDS.items()

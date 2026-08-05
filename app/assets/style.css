@@ -73,6 +73,14 @@
     border-top: none;
 }
 
+/* Sensor Status → Current readings: the tab strip already reads as its own
+   quiet block (per the comment above _dot_style's usage), so a rule
+   directly under it doubled up with that visual break. The other section
+   boundaries keep their hairline. */
+.left-section:nth-child(2) {
+    border-top: none;
+}
+
 .left-section:last-child {
     padding-bottom: 4px;
 }
@@ -377,6 +385,10 @@
     gap: 5px;
     font-size: 10px;
     color: var(--ink-faint);
+}
+
+.chart-threshold-legend-name {
+    font-weight: 500;
 }
 
 .chart-threshold-legend-line {
