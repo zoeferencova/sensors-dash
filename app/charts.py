@@ -142,6 +142,16 @@ def _apply_axis_style(fig: go.Figure) -> None:
     )
     fig.update_xaxes(**axis_style)
     fig.update_yaxes(**axis_style)
+    # Time of day only. Left to itself a Plotly date axis prints a two-line
+    # tick — the time, with the date stacked underneath at each day boundary
+    # — which costs a whole extra row of chrome under BOTH charts to repeat
+    # something the top bar's clock is already showing continuously. An
+    # explicit tickformat replaces that hierarchy with a single line.
+    #
+    # X only, and deliberately not folded into axis_style above: that dict
+    # goes to both axes, and a date format on the y axis would wreck the
+    # rainfall chart's ".1f" (see build_rainfall_figure).
+    fig.update_xaxes(tickformat="%H:%M")
     # Y ONLY, deliberately not folded into axis_style above: the x axis is a
     # date axis carrying an explicit pinned range (_apply_fixed_x_range), and
     # "include zero" on a date axis means the 1970 epoch — it would blow the

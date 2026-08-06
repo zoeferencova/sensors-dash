@@ -644,6 +644,10 @@
     font-weight: 700;
     letter-spacing: 0.04em;
     color: #6f6890;
+    /* The same wash the charts' injection band uses, so the tag reads as a
+       small piece of the same "simulated" marking rather than only a
+       bordered label. */
+    background-color: rgba(143, 136, 168, 0.14);
     border: 1px solid #c9c4d6;
     border-radius: 3px;
     padding: 0 3px;
