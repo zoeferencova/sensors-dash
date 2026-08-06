@@ -93,30 +93,14 @@ def _base_layout(title: str) -> dict:
         # other's colour. Harmless on the water-level figure, which has no
         # bar traces at all.
         barmode="overlay",
-        # Explicit rather than left to Plotly's default: with the threshold
-        # proxy traces gone, "simulated event" is the only showlegend=True
-        # trace left, and Plotly.js hides the legend entirely when fewer
-        # than two traces are legend-eligible unless told otherwise — which
-        # would silently drop the one label that explains the injected
-        # line/bar colour's meaning.
-        showlegend=True,
-        legend=dict(
-            orientation="h",
-            x=0,
-            xanchor="left",
-            y=-0.16,
-            yanchor="top",
-            # A step smaller than the tick labels: the threshold legend is a
-            # key you consult, not a reading, and it sat level with the data
-            # labels while competing with them for attention.
-            font=dict(size=10, color=AXIS_COLOR),
-            # The legend here is a key, not a control: clicking an entry
-            # would hide a threshold line or the injected-event markers,
-            # which is never something the user wants mid-replay.
-            itemclick=False,
-            itemdoubleclick=False,
-            bgcolor="rgba(0,0,0,0)",
-        ),
+        # No Plotly legend on either chart. "Simulated event" was the last
+        # entry either one had, and it was drawn TWICE — once under the water
+        # level chart and again under rainfall — for what is a single idea
+        # spanning both. It now lives once, in the HTML legend below the
+        # water-level chart (main.py's chart-threshold-legend), alongside the
+        # threshold key it belongs with. Dropping the Plotly legend also
+        # reclaims the vertical band it reserved under each plot.
+        showlegend=False,
         hoverlabel=dict(font=dict(family=FONT_FAMILY, size=11)),
         template=None,
     )
@@ -177,7 +161,8 @@ def _injected_line_trace() -> go.Scatter:
         mode="lines",
         name="simulated event",
         line=dict(color=INJECTED_COLOR, width=2.5, dash=INJECTED_LINE_DASH),
-        showlegend=True,
+        # Labelled once in the HTML legend instead — see _base_layout.
+        showlegend=False,
     )
 
 
@@ -199,7 +184,8 @@ def _injected_bar_trace() -> go.Bar:
         y=[],
         name="simulated event",
         marker_color=INJECTED_COLOR,
-        showlegend=True,
+        # Labelled once in the HTML legend instead — see _base_layout.
+        showlegend=False,
     )
 
 

@@ -352,26 +352,55 @@ left_panel_top = html.Div(
                     className="chart-threshold-legend",
                     children=[
                         html.Div(
-                            className="chart-threshold-legend-item",
+                            className="chart-threshold-legend-row",
                             children=[
-                                # A line swatch, not a dot: each entry keys a
-                                # solid hline on the chart, so its legend
-                                # mark should have the same shape as the
-                                # thing it stands for (the map legend's
-                                # "Botič reach" entry makes the same call).
-                                html.Span(
-                                    className="chart-threshold-legend-line",
-                                    style={"backgroundColor": SEVERITY_COLORS[stage]},
-                                ),
-                                html.Span(
-                                    [
-                                        html.Span(stage, className="chart-threshold-legend-name"),
-                                        f" {level}",
-                                    ]
-                                ),
+                                html.Div(
+                                    className="chart-threshold-legend-item",
+                                    children=[
+                                        # A line swatch, not a dot: each entry
+                                        # keys a solid hline on the chart, so
+                                        # its legend mark should have the same
+                                        # shape as the thing it stands for
+                                        # (the map legend's "Botič reach"
+                                        # entry makes the same call).
+                                        html.Span(
+                                            className="chart-threshold-legend-line",
+                                            style={"backgroundColor": SEVERITY_COLORS[stage]},
+                                        ),
+                                        html.Span(
+                                            [
+                                                html.Span(stage, className="chart-threshold-legend-name"),
+                                                f" {level}",
+                                            ]
+                                        ),
+                                    ],
+                                )
+                                for stage, level in THRESHOLDS.items()
                             ],
-                        )
-                        for stage, level in THRESHOLDS.items()
+                        ),
+                        # ONE entry for both charts, not one under each: the
+                        # injected violet means the same thing on the water
+                        # level line and on the rainfall bars, and it sits
+                        # with the thresholds because this block is the key
+                        # for everything drawn on the pair. Its own row —
+                        # the label is far longer than a "Stage 120", so
+                        # sharing the four-across row above would break their
+                        # even spacing.
+                        html.Div(
+                            className="chart-threshold-legend-row",
+                            children=html.Div(
+                                className="chart-threshold-legend-item",
+                                children=[
+                                    # Dashed swatch, matching the trace's own
+                                    # dash — the legend mark has to carry the
+                                    # line's KIND, not just its colour, since
+                                    # that is half of what distinguishes it
+                                    # from the solid threshold lines.
+                                    html.Span(className="chart-threshold-legend-dash"),
+                                    html.Span("Simulated event"),
+                                ],
+                            ),
+                        ),
                     ],
                 ),
                 html.Div(

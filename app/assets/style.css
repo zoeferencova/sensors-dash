@@ -371,19 +371,27 @@
     margin-top: 14px;
 }
 
-/* The ČHMÚ stage/value key for the water-level chart's threshold lines,
-   replacing the fake zero-data Plotly traces that used to draw this as a
-   chart legend. One row, small and muted — a key you consult, not a
-   reading. Sitting between the two charts, ABOVE its own bottom border,
-   which is what doubles as the separator between them — no extra element
-   needed. */
+/* The key for BOTH charts: the ČHMÚ stage/value bands on row one, the
+   shared "Simulated event" entry on row two. Replaces the fake zero-data
+   Plotly traces that used to draw the thresholds, and the per-chart Plotly
+   legend that used to draw "simulated event" twice. Small and muted — a key
+   you consult, not a reading. Sitting between the two charts, ABOVE its own
+   bottom border, which doubles as the separator between them. */
 .chart-threshold-legend {
     display: flex;
-    flex-wrap: nowrap;
-    justify-content: space-between;
+    flex-direction: column;
+    gap: 7px;
     margin: 16px 0 0 0;
     padding: 0 4px 18px 4px;
     border-bottom: 1px solid var(--line-faint);
+}
+
+/* The four stage bands share a row and spread across it; the simulated
+   entry's row holds one left-aligned item. */
+.chart-threshold-legend-row {
+    display: flex;
+    flex-wrap: nowrap;
+    justify-content: space-between;
 }
 
 .chart-threshold-legend-item {
@@ -404,6 +412,23 @@
     width: 12px;
     height: 2px;
     border-radius: 1px;
+}
+
+/* The injected overlay's swatch. Same 12px footprint as a threshold swatch
+   so both rows' labels line up, but drawn as dashes via a repeating
+   gradient — it has to carry the trace's dash, not just its violet, because
+   "broken line" is half of what separates it from the solid threshold
+   lines. Colour is charts.INJECTED_COLOR. */
+.chart-threshold-legend-dash {
+    flex: 0 0 auto;
+    width: 12px;
+    height: 2px;
+    border-radius: 1px;
+    background: repeating-linear-gradient(
+        to right,
+        #7d5ba6 0 4px,
+        transparent 4px 6px
+    );
 }
 
 /* ---- Rule-evaluation accordion ---------------------------------------- */
