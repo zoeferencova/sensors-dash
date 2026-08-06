@@ -45,6 +45,7 @@ from event_injector import (
     events_signature,
     events_to_store,
     injected_spans,
+    targets_for_scenario,
 )
 from replay import build_timeline, visible_readings
 from risk_assessment import RAINFALL_CONFIRM_MM_H, assess_risk
@@ -893,19 +894,33 @@ def select_sensor(_tab_clicks, _marker_clicks, _trigger_clicks, scenario, target
 @app.callback(
     Output("injector-scenario-description", "children"),
     Output("injector-target-sensor-row", "style"),
+    Output("injector-target-sensor-select", "options"),
+    Output("injector-target-sensor-select", "value"),
     Input("injector-scenario-select", "value"),
+    State("injector-target-sensor-select", "value"),
 )
-def update_injector_scenario_controls(scenario):
-    """Scenario picker drives the description text and whether the
-    target-sensor control is shown at all — "Catchment-wide event" hits
-    every sensor per CLAUDE.md, so it has no single target
-    (SCENARIOS_NEEDING_TARGET is the same set build_event's scenarios use,
-    not re-derived here). Magnitude is a fixed per-scenario preset
-    (DEFAULT_MAGNITUDE, used directly by the Trigger callback) rather than
-    a control — one less thing to configure or explain."""
+def update_injector_scenario_controls(scenario, current_target):
+    """Scenario picker drives the description text, whether the
+    target-sensor control is shown at all, and which targets it offers.
+
+    "Catchment-wide event" hits every sensor per CLAUDE.md, so it has no
+    single target (SCENARIOS_NEEDING_TARGET is the same set build_event's
+    scenarios use, not re-derived here). Magnitude is a fixed per-scenario
+    preset (DEFAULT_MAGNITUDE, used directly by the Trigger callback) rather
+    than a control — one less thing to configure or explain.
+
+    The option list is per-scenario because "Sensor fault" cannot
+    demonstrate a fault at S01 (see SCENARIO_EXCLUDED_TARGETS). The value is
+    only rewritten when the current selection has just become invalid —
+    returning no_update otherwise, so switching scenarios never silently
+    moves a target the user deliberately set.
+    """
     description = SCENARIO_DESCRIPTIONS[scenario]
     target_row_style = {} if scenario in SCENARIOS_NEEDING_TARGET else {"display": "none"}
-    return description, target_row_style
+    allowed = targets_for_scenario(scenario, SENSOR_IDS)
+    options = [{"label": sid, "value": sid} for sid in allowed]
+    value = no_update if current_target in allowed else allowed[0]
+    return description, target_row_style, options, value
 
 
 def _stored_events_signature(active_events: list) -> list:

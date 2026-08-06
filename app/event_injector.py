@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
-from risk_assessment import CUMULATIVE_LAG_FROM_S01
+from risk_assessment import CUMULATIVE_LAG_FROM_S01, LAG_MARGIN
 
 CHANNEL_SENSORS = ["S01", "S02", "S03", "S04"]
 UPSTREAM_SENSOR_ID = "S01"
@@ -44,6 +44,25 @@ SCENARIOS = [
 # target-sensor control per scenario, rather than hardcoding the scenario
 # names a second time.
 SCENARIOS_NEEDING_TARGET = {"Convective storm", "Sensor fault", "Saturated antecedent"}
+
+# Targets a scenario must not offer, because it cannot demonstrate what the
+# scenario exists to show there.
+#
+# S01 is excluded from "Sensor fault" for a structural reason, not a tuning
+# one: it is the upstream boundary gauge, so it self-confirms on
+# (own_rain OR rising_fast). The suppression zeroes its rainfall, but a
+# fault's whole premise is a sudden water-level jump, which makes
+# rising_fast unavoidably true — so a fault injected at S01 always reads as
+# a confirmed flood, never a fault. That is CORRECT per CLAUDE.md (a gauge
+# with nothing upstream of it has nothing to contradict a spurious jump);
+# it just means the scenario can't do its job there, so it isn't offered.
+SCENARIO_EXCLUDED_TARGETS = {"Sensor fault": {UPSTREAM_SENSOR_ID}}
+
+
+def targets_for_scenario(scenario: str, sensor_ids: list) -> list:
+    """The sensor ids this scenario may be aimed at, in the order given."""
+    excluded = SCENARIO_EXCLUDED_TARGETS.get(scenario, set())
+    return [sid for sid in sensor_ids if sid not in excluded]
 
 # Shown under the scenario picker. Kept to the mechanism + the gotcha, not a
 # restatement of the scenario name the dropdown already shows.
@@ -244,7 +263,27 @@ def injected_spans(events: list, timeline: list, sensor_id: str, variable: str) 
 
 def build_event(scenario: str, target_sensor: str | None, magnitude: float, trigger_step: int) -> InjectedEvent:
     """Construct the delta list for one triggered scenario. Pure — reads no
-    session_state, touches no data."""
+    session_state, touches no data.
+
+    An excluded target is corrected here rather than trusted from the caller,
+    so SCENARIO_EXCLUDED_TARGETS holds by CONSTRUCTION and not merely by the
+    UI happening to offer the right options. The dropdown filters its options
+    from the same rule, but the Trigger callback reads the target as `State`:
+    switching to a scenario and triggering it inside the same ~50ms, before
+    the dropdown-correction callback lands, would otherwise still hand an
+    excluded target straight through. That is not hypothetical — for
+    "Sensor fault" it reintroduces exactly the always-confirms outcome the
+    exclusion exists to prevent.
+
+    Driven off the shared rule (never a second hardcoded S01 check), so the
+    two layers cannot drift if the exclusion list ever changes. Scenarios
+    with no exclusions are unaffected, and a None target — a scenario that
+    has no single target at all — is left alone.
+    """
+    allowed_targets = targets_for_scenario(scenario, CHANNEL_SENSORS)
+    if target_sensor is not None and target_sensor not in allowed_targets:
+        target_sensor = allowed_targets[0]
+
     if scenario == "Convective storm":
         # Sharp, brief rainfall spike at one sensor, with the water_level
         # response it would locally cause. Only self-confirms cleanly at
@@ -279,9 +318,28 @@ def build_event(scenario: str, target_sensor: str | None, magnitude: float, trig
         # be doing when this is triggered.
         rise, hold, decay = 2, 3, 2
         deltas = [Delta(target_sensor, "water_level", magnitude, rise, hold, decay)]
+        # The suppression has to reach BACKWARD from the trigger, not just
+        # forward. A downstream sensor's Layer-3 confirmation reads S01's
+        # rainfall over [now-(lag+margin), now-(lag-margin)] — for S02 that
+        # is r-11..r-2 relative to the trigger, entirely BEFORE it. The
+        # original forward-only envelope covered r0..r5, so the two ranges
+        # were completely disjoint: the suppression never touched the window
+        # the confirmation actually reads, and ambient pre-trigger rain at
+        # S01 confirmed the jump. Measured across the replay, that produced
+        # confirmed_flood on ~21% of trigger positions instead of the
+        # possible_fault this scenario guarantees.
+        #
+        # rise=1/decay=1 makes the pulse a flat 1.0 across the whole span:
+        # full zeroing with no partial edges, so there is no step where
+        # rainfall is merely halved and could still clear the 2 mm/h bar.
+        lag = 0 if target_sensor == UPSTREAM_SENSOR_ID else CUMULATIVE_LAG_FROM_S01[target_sensor]
+        back = lag + LAG_MARGIN
+        span = back + rise + hold + decay
         suppress_targets = {target_sensor, UPSTREAM_SENSOR_ID}
         for sid in suppress_targets:
-            deltas.append(Delta(sid, "rainfall_intensity", 0.0, rise, hold, decay, mode="suppress"))
+            deltas.append(
+                Delta(sid, "rainfall_intensity", 0.0, 1, span, 1, mode="suppress", lag_offset=-back)
+            )
 
     elif scenario == "Saturated antecedent":
         # Same shape as a convective storm, but with the saturated-ground
