@@ -592,14 +592,16 @@
 
 /* Marks a log line produced while an injected event was overlaying the
    reading. Small and quiet — it only needs to be noticeable on the entries
-   that have it, never loud enough to compete with the verdict text. */
+   that have it, never loud enough to compete with the verdict text.
+   Violet to match charts.INJECTED_COLOR: "simulated" is one idea and gets
+   one colour, whether it shows up on a chart or in the log. */
 .log-tag-injected {
     flex: 0 0 auto;
     font-size: 9px;
     font-weight: 700;
     letter-spacing: 0.04em;
-    color: #e07b00;
-    border: 1px solid #f0c896;
+    color: #7d5ba6;
+    border: 1px solid #cbb8e0;
     border-radius: 3px;
     padding: 0 3px;
     line-height: 1.4;

@@ -23,9 +23,21 @@ from constants import SEVERITY_COLORS, THRESHOLDS
 # the threshold lines crossing it are exactly that.
 WATER_LEVEL_COLOR = "#3d5a73"
 RAINFALL_COLOR = "#8ba4b8"
-# The one deliberate exception: injected points must read as "this is not
-# real data", so they keep a warm accent that nothing else on the page uses.
-INJECTED_MARKER_COLOR = "#e07b00"
+# The one deliberate exception: injected readings must read as "this is not
+# real data", so they get an accent nothing else on the page uses.
+#
+# Violet specifically, and NOT the warm orange this used to be: every
+# SEVERITY_COLORS entry is somewhere on the ochre->maroon warm ramp (Watch
+# #C9B458, Alert #C68A4E, Danger #B4553F, Extreme #7D3A32), so an orange
+# overlay sat right on top of the Alert threshold line's hue while meaning
+# something completely unrelated — "simulated", not "this severity". Violet
+# is off that ramp entirely and equally clear of the two data blues, so it
+# can't be misread as a risk state at any threshold.
+INJECTED_COLOR = "#7d5ba6"
+# Dashed, so the overlay is distinguishable from the solid threshold lines
+# by KIND and not only by colour — a broken line reads as "synthetic" even
+# before the colour registers, and survives a greyscale print of the writeup.
+INJECTED_LINE_DASH = "dash"
 
 # --- Visual language ------------------------------------------------------
 # Modelled on Google Flood Hub's discharge panel (the layout reference in
@@ -133,8 +145,8 @@ def _injected_line_trace() -> go.Scatter:
     an injected tick; only in-place data updates are ever needed after the
     initial build.
 
-    Draws the injected SEGMENT of the water-level line in injected-orange,
-    directly over the real line, rather than marking it with a diamond. This
+    Draws the injected SEGMENT of the water-level line dashed in the
+    injected violet, directly over the real line. This
     works with no change to the extendData contract at all: `apply_injections`
     already overlays the modified value into the same `value` column the
     real (trace 0) line reads, so trace 0's blue line already passes through
@@ -153,21 +165,29 @@ def _injected_line_trace() -> go.Scatter:
         y=[],
         mode="lines",
         name="simulated event",
-        line=dict(color=INJECTED_MARKER_COLOR, width=3),
+        line=dict(color=INJECTED_COLOR, width=2.5, dash=INJECTED_LINE_DASH),
         showlegend=True,
     )
 
 
 def _injected_bar_trace() -> go.Bar:
     """The rainfall-chart equivalent of _injected_line_trace: the injected
-    subset of bars, redrawn in injected-orange directly over the real bars
-    (via `barmode="overlay"` in _base_layout) rather than marked with a
-    diamond above them."""
+    subset of bars, redrawn in the injected violet directly over the real
+    bars (via `barmode="overlay"` in _base_layout).
+
+    Colour alone carries it here — a bar can't be dashed, and a hatch
+    pattern was tried and dropped: at 5-minute resolution a 12-hour window
+    holds ~144 bars only a couple of pixels wide, where any fill pattern
+    turns to noise rather than reading as texture. The violet is doing the
+    same job it does on the line, and the two charts sit directly above one
+    another, so the association carries across without needing a second
+    visual device.
+    """
     return go.Bar(
         x=[],
         y=[],
         name="simulated event",
-        marker_color=INJECTED_MARKER_COLOR,
+        marker_color=INJECTED_COLOR,
         showlegend=True,
     )
 
