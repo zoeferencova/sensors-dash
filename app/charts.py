@@ -77,15 +77,30 @@ def _base_layout(title: str) -> dict:
             x=0,
             xref="container",
             xanchor="left",
-            pad=dict(l=6),
+            # No left pad: the graph div already starts at the panel's own
+            # content margin, so any pad here indents the title relative to
+            # every heading, stat tile and legend row in the sidebar.
+            pad=dict(l=0),
             font=dict(size=13, color=TITLE_COLOR, weight=600),
         ),
         font=dict(family=FONT_FAMILY, size=11, color=AXIS_COLOR),
         plot_bgcolor="white",
         paper_bgcolor="white",
-        # Left/bottom stay small because automargin grows them to fit the
-        # tick labels; the top leaves room for the title.
-        margin=dict(l=8, r=12, t=44, b=5),
+        # r=0 puts the plotted area's right edge on the panel's own content
+        # margin; the old r=12 sat on top of automargin's reservation, so the
+        # charts read as narrower than the stat tiles and legend rows stacked
+        # around them.
+        #
+        # l is a FIXED floor rather than 0-plus-automargin, because the two
+        # charts are stacked and share one time axis. Sized independently,
+        # automargin reserves whatever each chart's own y labels need — 22px
+        # for water level's "300" against 17px for rainfall's "2" — which
+        # left the same timestamp sitting 5px apart in the two plots, so
+        # their gridlines disagreed and a rainfall spike didn't line up with
+        # the water-level rise it caused. A shared floor wide enough for both
+        # pins them to the same x geometry. automargin still overrides it if
+        # a label ever needs more, so this can't clip.
+        margin=dict(l=26, r=0, t=44, b=5),
         # rainfall's injected bar trace needs to draw directly on top of the
         # real bar at the same x, not offset beside it — Plotly's default
         # "group" barmode would put same-x bars from two traces side by
