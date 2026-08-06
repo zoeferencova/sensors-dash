@@ -429,33 +429,20 @@
     border-radius: 1px;
 }
 
-/* The injected overlay's swatch. Same 12px footprint as a threshold swatch
-   so both rows' labels line up, but drawn as dashes via a repeating
-   gradient — it has to carry the trace's dash, not just its violet, because
-   "broken line" is half of what separates it from the solid threshold
-   lines. Colour is charts.INJECTED_COLOR. */
-.chart-threshold-legend-dash {
+/* The injection highlight band's swatch: a filled block, because the thing
+   it stands for is a shaded REGION rather than a line or a mark. Fill is
+   charts.INJECTED_BAND_FILL exactly, so the swatch is a true sample of what
+   appears on the chart. At 12% alpha that block is close to invisible on
+   its own, though, so it carries a light border of the same violet to give
+   it an edge to read against the white panel — the band on a chart gets its
+   edges for free from the data around it. */
+.chart-threshold-legend-band {
     flex: 0 0 auto;
-    width: 12px;
-    height: 2px;
-    border-radius: 1px;
-    background: repeating-linear-gradient(
-        to right,
-        #7d5ba6 0 4px,
-        transparent 4px 6px
-    );
-}
-
-/* The rainfall chart's swatch: a filled violet square, because that chart
-   draws the overlay as solid bars rather than a dashed line. Same
-   charts.INJECTED_COLOR, different shape — the colour carries "simulated",
-   the shape carries which mark on which chart. */
-.chart-threshold-legend-square {
-    flex: 0 0 auto;
-    width: 9px;
-    height: 9px;
-    border-radius: 1px;
-    background-color: #7d5ba6;
+    width: 14px;
+    height: 10px;
+    border-radius: 2px;
+    background-color: rgba(143, 136, 168, 0.18);
+    border: 1px solid rgba(143, 136, 168, 0.45);
 }
 
 /* ---- Rule-evaluation accordion ---------------------------------------- */
@@ -645,15 +632,19 @@
 /* Marks a log line produced while an injected event was overlaying the
    reading. Small and quiet — it only needs to be noticeable on the entries
    that have it, never loud enough to compete with the verdict text.
-   Violet to match charts.INJECTED_COLOR: "simulated" is one idea and gets
-   one colour, whether it shows up on a chart or in the log. */
+   Same greyish lavender as the charts' injection band
+   (charts.INJECTED_BAND_FILL): "simulated" is one idea and gets one colour,
+   whether it shows up as a shaded region on a chart or as a tag in the log.
+   Taken to full opacity and darkened here rather than reused at the band's
+   18% — this is 9px bold text that has to stay legible, where the band is a
+   large area that only has to be noticed. */
 .log-tag-injected {
     flex: 0 0 auto;
     font-size: 9px;
     font-weight: 700;
     letter-spacing: 0.04em;
-    color: #7d5ba6;
-    border: 1px solid #cbb8e0;
+    color: #6f6890;
+    border: 1px solid #c9c4d6;
     border-radius: 3px;
     padding: 0 3px;
     line-height: 1.4;

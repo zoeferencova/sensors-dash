@@ -44,6 +44,7 @@ from event_injector import (
     events_from_store,
     events_signature,
     events_to_store,
+    injected_spans,
 )
 from replay import build_timeline, visible_readings
 from risk_assessment import RAINFALL_CONFIRM_MM_H, assess_risk
@@ -293,24 +294,19 @@ top_bar = html.Div(
 # what it reads now, its history, why the verdict) instead of one dense
 # column. The sections carry the spacing so the headings themselves keep the
 # type they already had.
-def _simulated_event_legend_item(mark: str) -> html.Div:
-    """The key for the injected overlay, shown under BOTH charts.
+def _simulated_event_legend_item() -> html.Div:
+    """The key for the injection highlight band.
 
-    The violet means the same thing in each, but the two charts are read
-    separately — someone looking at the rainfall bars shouldn't have to
-    glance up past a whole other plot to find out what the violet ones are.
-    Built from one helper so the two copies cannot drift apart.
-
-    `mark` picks the swatch shape, because each chart draws the injected
-    overlay differently and a swatch has to look like the thing it stands
-    for (the same rule the threshold lines and the map's "Botič reach" entry
-    already follow): "dash" for the water-level chart's dashed line, "square"
-    for the rainfall chart's solid bars.
+    ONE entry for both charts, sitting below the pair. It can be shared now
+    in a way it couldn't before: the band is the same shaded region drawn the
+    same way on both charts, whereas the old treatment restyled each chart's
+    own mark (a dashed line on one, recoloured bars on the other) and so
+    needed a swatch per chart to look like the thing it stood for.
     """
     return html.Div(
         className="chart-threshold-legend-item",
         children=[
-            html.Span(className=f"chart-threshold-legend-{mark}"),
+            html.Span(className="chart-threshold-legend-band"),
             html.Span("Simulated event"),
         ],
     )
@@ -401,27 +397,18 @@ left_panel_top = html.Div(
                                 for stage, level in THRESHOLDS.items()
                             ],
                         ),
-                        # Its own row: the label is far longer than a
-                        # "Stage 120", so sharing the four-across row above
-                        # would break their even spacing.
-                        html.Div(
-                            className="chart-threshold-legend-row",
-                            children=_simulated_event_legend_item("dash"),
-                        ),
                     ],
                 ),
                 html.Div(
                     className="chart-slot chart-slot-lower",
                     children=dcc.Graph(id="rainfall-graph", responsive=True, figure=go.Figure()),
                 ),
-                # The rainfall chart's own copy of the key. No thresholds to
-                # list here (the ČHMÚ bands are water-level stages), so this
-                # is the injected entry alone, flush to the panel margin like
-                # the block above it. A square, not a dash: this chart draws
-                # the overlay as solid bars.
+                # The single "Simulated event" key for BOTH charts, below the
+                # pair rather than duplicated under each: the highlight band
+                # is drawn identically on the two, so one swatch covers it.
                 html.Div(
                     className="chart-legend-standalone",
-                    children=_simulated_event_legend_item("square"),
+                    children=_simulated_event_legend_item(),
                 ),
             ],
         ),
@@ -975,9 +962,19 @@ def update_charts(sim_step, selected_sensor, active_events_raw, chart_state):
         # forward. This is the only place the range travels with a figure;
         # every tick moves it via relayout instead.
         x_range = chart_x_range(sim_step)
-        water_level_fig = charts.build_water_level_figure(selected_sensor, x_range)
+        # The injection highlight bands ride on the figure, not on a tick:
+        # they are layout shapes, and extendData appends trace data only. This
+        # rebuild branch is the ONLY place they can be written — which is
+        # exactly enough, because it fires on the two occasions the bands can
+        # change (an event triggered, or Reset clearing them) plus a sensor
+        # switch, which needs them recomputed for the newly selected sensor's
+        # own lag. Between rebuilds they simply persist, which is also what
+        # makes them respect event retention for free.
+        water_level_bands = injected_spans(active_events, TIMELINE, selected_sensor, "water_level")
+        rainfall_bands = injected_spans(active_events, TIMELINE, selected_sensor, "rainfall_intensity")
+        water_level_fig = charts.build_water_level_figure(selected_sensor, x_range, water_level_bands)
         charts.update_water_level_figure(water_level_fig, water_level_series)
-        rainfall_fig = charts.build_rainfall_figure(selected_sensor, x_range)
+        rainfall_fig = charts.build_rainfall_figure(selected_sensor, x_range, rainfall_bands)
         charts.update_rainfall_figure(rainfall_fig, rainfall_series)
         return water_level_fig, no_update, rainfall_fig, no_update, new_state
 
@@ -990,43 +987,25 @@ def update_charts(sim_step, selected_sensor, active_events_raw, chart_state):
     new_water_level = water_level_series[water_level_series["timestamp"] > cutoff]
     new_rainfall = rainfall_series[rainfall_series["timestamp"] > cutoff]
 
-    # Trace 0 (main line/bar) always gets the new point(s); trace 1 (the
-    # overlay that recolors the injected stretch directly on the line/bars)
-    # gets only whichever of those are flagged injected — possibly none, a
-    # harmless empty extend for that trace. Without this, only the very first
-    # point of a multi-tick injected event (sent by the full-rebuild that
-    # fires on trigger) would ever be recolored; later ticks during the same
-    # event would raise the line/bars correctly but silently drop the "this
-    # is simulated" colouring.
-    #
-    # The water-level overlay is a LINE, so it also needs the last
-    # already-drawn row as lookback context: that is what lets a run opening
-    # inside this batch emit its leading boundary point and its break from
-    # the previous run, exactly as the full rebuild would (see
-    # charts.injected_overlay). A catchment-wide event makes this load-
-    # bearing rather than theoretical — its downstream sensors start their
-    # pulse 9-15 steps AFTER the trigger, so their run opens during ordinary
-    # incremental ticks, long after the rebuild that fired on trigger.
-    rendered_water_level = water_level_series[water_level_series["timestamp"] <= cutoff]
-    water_level_context = None if rendered_water_level.empty else rendered_water_level.iloc[-1]
-    new_water_level_x, new_water_level_y = charts.injected_overlay(new_water_level, water_level_context)
-    # Bars need no context: each bar stands alone, so there is no line to
-    # break and no boundary to join (see charts.injected_points).
-    new_rainfall_injected = charts.injected_points(new_rainfall)
-
+    # One trace per chart now, so each append targets [0] alone. Marking an
+    # injected stretch used to mean a second, parallel trace carrying a
+    # restyled copy of the same readings, which had to be kept in step with
+    # trace 0 on every tick; shading the background behind the region instead
+    # means the injection is drawn entirely in layout, and the data path goes
+    # back to being one array of readings per chart.
     water_level_extend = (
         {
-            "x": [new_water_level["timestamp"].tolist(), new_water_level_x],
-            "y": [new_water_level["value"].tolist(), new_water_level_y],
+            "x": [new_water_level["timestamp"].tolist()],
+            "y": [new_water_level["value"].tolist()],
         },
-        [0, 1],
+        [0],
     )
     rainfall_extend = (
         {
-            "x": [new_rainfall["timestamp"].tolist(), new_rainfall_injected["timestamp"].tolist()],
-            "y": [new_rainfall["value"].tolist(), new_rainfall_injected["value"].tolist()],
+            "x": [new_rainfall["timestamp"].tolist()],
+            "y": [new_rainfall["value"].tolist()],
         },
-        [0, 1],
+        [0],
     )
     return no_update, water_level_extend, no_update, rainfall_extend, new_state
 

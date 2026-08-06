@@ -144,6 +144,85 @@ def _pulse(relative_step: int, rise: int, hold: int, decay: int) -> float:
     return 0.0
 
 
+def _delta_step_span(delta: Delta) -> tuple[int, int] | None:
+    """The relative-step range [first, last] over which this delta's pulse is
+    actually nonzero, or None if it never is.
+
+    Derived by evaluating `_pulse` rather than deriving a closed form from
+    rise/hold/decay, deliberately: apply_injections marks a row `injected`
+    exactly when `factor > 0`, so running the same function with the same
+    test is what guarantees a highlight band can never disagree with the
+    readings it is supposed to be highlighting. A closed form would be a
+    second, independently-maintained description of the envelope's edges —
+    note that the last decay step already evaluates to exactly 0.0, which is
+    the kind of off-by-one this sidesteps entirely.
+    """
+    horizon = delta.rise + delta.hold + delta.decay
+    nonzero = [r for r in range(horizon + 1) if _pulse(r, delta.rise, delta.hold, delta.decay) > 0]
+    if not nonzero:
+        return None
+    return nonzero[0], nonzero[-1]
+
+
+def injected_spans(events: list, timeline: list, sensor_id: str, variable: str) -> list[tuple]:
+    """Timestamp ranges [(start, end), ...] this sensor/variable is under
+    injection for, across every active event. Overlapping ranges are merged
+    so two events can't stack their translucent bands into a darker one.
+
+    Spans cover each event's WHOLE envelope, including steps the replay has
+    not reached yet. That is what lets the highlight band work as a layout
+    shape under the extendData pattern: a shape cannot be appended to the way
+    trace data can, so the band is drawn once at trigger time and the sliding
+    x-window (main.chart_x_range, which always ends at "now") does the rest —
+    it clips whatever is still in the future, and reveals more of the band on
+    its own as the window advances. No per-tick layout write, and nothing
+    about the future is shown early.
+
+    Each range is padded by half a sampling interval either side so a bar or
+    point sitting exactly on the first/last injected timestamp is enclosed by
+    the band rather than sitting on its edge.
+    """
+    if not events or not timeline:
+        return []
+
+    last_step = len(timeline) - 1
+    half_interval = (timeline[1] - timeline[0]) / 2 if len(timeline) > 1 else None
+
+    step_ranges: list[tuple[int, int]] = []
+    for event in events:
+        for delta in event.deltas:
+            if delta.sensor_id != sensor_id or delta.variable != variable:
+                continue
+            span = _delta_step_span(delta)
+            if span is None:
+                continue
+            start = event.trigger_step + delta.lag_offset + span[0]
+            end = event.trigger_step + delta.lag_offset + span[1]
+            # A wraparound clears events outright, so a span can only ever
+            # run off the END of the timeline, never before its start.
+            if start > last_step:
+                continue
+            step_ranges.append((max(start, 0), min(end, last_step)))
+
+    if not step_ranges:
+        return []
+
+    merged: list[list[int]] = []
+    for start, end in sorted(step_ranges):
+        if merged and start <= merged[-1][1] + 1:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+
+    spans = []
+    for start, end in merged:
+        first, last = timeline[start], timeline[end]
+        if half_interval is not None:
+            first, last = first - half_interval, last + half_interval
+        spans.append((first, last))
+    return spans
+
+
 def build_event(scenario: str, target_sensor: str | None, magnitude: float, trigger_step: int) -> InjectedEvent:
     """Construct the delta list for one triggered scenario. Pure — reads no
     session_state, touches no data."""

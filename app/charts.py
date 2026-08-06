@@ -23,21 +23,27 @@ from constants import SEVERITY_COLORS, THRESHOLDS
 # the threshold lines crossing it are exactly that.
 WATER_LEVEL_COLOR = "#3d5a73"
 RAINFALL_COLOR = "#8ba4b8"
-# The one deliberate exception: injected readings must read as "this is not
-# real data", so they get an accent nothing else on the page uses.
+# Injected stretches are marked by shading the BACKGROUND behind them rather
+# than by restyling the data itself. The readings stay in their ordinary
+# solid style throughout, which is the honest thing to draw: an injected
+# reading is a real reading of a simulated world, and recolouring the line
+# made the trace itself look like a different kind of measurement. Shading
+# the region says "this window is simulated" while leaving the data to be
+# read exactly as it is everywhere else.
 #
-# Violet specifically, and NOT the warm orange this used to be: every
+# A greyish lavender, and NOT the warm orange this started as: every
 # SEVERITY_COLORS entry is somewhere on the ochre->maroon warm ramp (Watch
 # #C9B458, Alert #C68A4E, Danger #B4553F, Extreme #7D3A32), so an orange
-# overlay sat right on top of the Alert threshold line's hue while meaning
-# something completely unrelated — "simulated", not "this severity". Violet
-# is off that ramp entirely and equally clear of the two data blues, so it
-# can't be misread as a risk state at any threshold.
-INJECTED_COLOR = "#7d5ba6"
-# Dashed, so the overlay is distinguishable from the solid threshold lines
-# by KIND and not only by colour — a broken line reads as "synthetic" even
-# before the colour registers, and survives a greyscale print of the writeup.
-INJECTED_LINE_DASH = "dash"
+# marker sat right on top of the Alert threshold line's hue while meaning
+# something completely unrelated — "simulated", not "this severity". This
+# hue is off that ramp entirely and equally clear of the two data blues.
+#
+# Desaturated rather than a saturated violet, to sit with the rest of the
+# dashboard's muted palette; the trade is that a greyer fill reads fainter
+# at the same alpha, so this carries slightly more than a vivid one would
+# need. Still low enough that it stays BEHIND the data and the threshold
+# lines and never competes with either.
+INJECTED_BAND_FILL = "rgba(143, 136, 168, 0.18)"
 
 # --- Visual language ------------------------------------------------------
 # Modelled on Google Flood Hub's discharge panel (the layout reference in
@@ -149,61 +155,6 @@ def _apply_axis_style(fig: go.Figure) -> None:
     fig.update_yaxes(rangemode="tozero")
 
 
-def _injected_line_trace() -> go.Scatter:
-    """Always present (even with empty data) so the trace list — and thus
-    the figure's structure — never changes shape between an uninjected and
-    an injected tick; only in-place data updates are ever needed after the
-    initial build.
-
-    Draws the injected SEGMENT of the water-level line dashed in the
-    injected violet, directly over the real line. This
-    works with no change to the extendData contract at all: `apply_injections`
-    already overlays the modified value into the same `value` column the
-    real (trace 0) line reads, so trace 0's blue line already passes through
-    the exact same y-values at every injected timestamp. This trace draws
-    only the injected-flagged subset of points — update_water_level_figure
-    was already computing that exact subset for the old diamond markers — as
-    a LINE instead of markers, in orange, layered on top of (drawn after)
-    trace 0. Where it has data, it visually replaces the blue segment
-    beneath it; everywhere else, trace 0 shows through unchanged. Since it
-    stops exactly where the `injected` flag stops, the boundary between real
-    and synthetic is sharp — a visual-honesty requirement, not a bug to
-    smooth over with interpolation.
-    """
-    return go.Scatter(
-        x=[],
-        y=[],
-        mode="lines",
-        name="simulated event",
-        line=dict(color=INJECTED_COLOR, width=2.5, dash=INJECTED_LINE_DASH),
-        # Labelled once in the HTML legend instead — see _base_layout.
-        showlegend=False,
-    )
-
-
-def _injected_bar_trace() -> go.Bar:
-    """The rainfall-chart equivalent of _injected_line_trace: the injected
-    subset of bars, redrawn in the injected violet directly over the real
-    bars (via `barmode="overlay"` in _base_layout).
-
-    Colour alone carries it here — a bar can't be dashed, and a hatch
-    pattern was tried and dropped: at 5-minute resolution a 12-hour window
-    holds ~144 bars only a couple of pixels wide, where any fill pattern
-    turns to noise rather than reading as texture. The violet is doing the
-    same job it does on the line, and the two charts sit directly above one
-    another, so the association carries across without needing a second
-    visual device.
-    """
-    return go.Bar(
-        x=[],
-        y=[],
-        name="simulated event",
-        marker_color=INJECTED_COLOR,
-        # Labelled once in the HTML legend instead — see _base_layout.
-        showlegend=False,
-    )
-
-
 def _apply_fixed_x_range(fig: go.Figure, x_range) -> None:
     """Pin the x-axis to an explicit [start, end] window instead of letting
     it autoscale to whatever has been appended so far.
@@ -230,76 +181,28 @@ def _apply_fixed_x_range(fig: go.Figure, x_range) -> None:
     fig.update_xaxes(range=[start, end], autorange=False)
 
 
-def injected_points(series: pd.DataFrame) -> pd.DataFrame:
-    """The injected-flagged rows only. Used for the rainfall BARS, where
-    each bar stands alone: a bar carries no line between it and its
-    neighbour, so there is nothing to break and nothing to join. Crucially
-    the bars must NOT pick up the boundary points injected_overlay adds for
-    the line — a bar drawn in the simulated colour is a claim that THAT
-    reading is simulated, so including the real bars either side would
-    mislabel real data."""
-    if "injected" not in series.columns or not series["injected"].any():
-        return series.iloc[0:0]
-    return series[series["injected"]]
+def _add_injection_bands(fig: go.Figure, bands) -> None:
+    """Shade the time ranges under injection.
 
-
-def injected_overlay(series: pd.DataFrame, context=None) -> tuple[list, list]:
-    """(x, y) for the injected LINE overlay: each contiguous run of injected
-    readings, plus the real reading immediately either side of it, with runs
-    separated by a None break.
-
-    Three things this gets right that filtering to the injected rows did not:
-
-    - **No diagonals across gaps.** Two separate injections (a second event,
-      or the same scenario fired again later) landed in one trace as a single
-      unbroken sequence, so Plotly drew a straight line from the end of the
-      first spike to the start of the second — straight across untouched real
-      data, implying a synthetic reading everywhere in between. `None` is
-      Plotly's line-break sentinel, so each run becomes its own polyline.
-
-    - **Clean joins at both edges.** The pulse envelope is already nonzero at
-      the first flagged reading, so a run drawn from its own first injected
-      row starts part-way up the rise, floating above the real line. Emitting
-      the real reading immediately BEFORE the run (and immediately AFTER it)
-      makes the overlay begin and end on points the blue line already passes
-      through, so the coloured segment grows out of the real series instead
-      of hovering beside it.
-
-    - **Works incrementally.** `context` is the last already-rendered row. It
-      is never emitted as data of its own — only as the leading boundary
-      point of a run that opens on the first row of `series`. That keeps the
-      whole computation lookBACK-only, so a per-tick extendData append
-      produces exactly the points a full rebuild would, without needing to
-      see a timestep the replay hasn't reached yet.
+    layer="below" puts the band beneath the traces AND beneath the threshold
+    lines, so it never dulls a stage colour or the data it sits behind. It is
+    a layout shape, which is precisely why it can span steps the replay has
+    not reached: shapes are not part of the extendData append path, so this
+    is drawn once when the figure is rebuilt (on trigger/reset/sensor change)
+    and the sliding x-window reveals it as the clock advances. See
+    event_injector.injected_spans for the full argument.
     """
-    if "injected" not in series.columns:
-        return [], []
-
-    xs: list = []
-    ys: list = []
-    previous_injected = bool(context["injected"]) if context is not None else False
-    previous_x = context["timestamp"] if context is not None else None
-    previous_y = context["value"] if context is not None else None
-
-    for timestamp, value, is_injected in zip(series["timestamp"], series["value"], series["injected"]):
-        if is_injected and not previous_injected and previous_x is not None:
-            # Opening a run: break away from any earlier run, then step back
-            # onto the real line so the colour change starts at the baseline.
-            xs.append(None)
-            ys.append(None)
-            xs.append(previous_x)
-            ys.append(previous_y)
-        # Inside a run, or the first real reading after one ends (the closing
-        # boundary, which lands the overlay back on the real line).
-        if is_injected or previous_injected:
-            xs.append(timestamp)
-            ys.append(value)
-        previous_injected, previous_x, previous_y = bool(is_injected), timestamp, value
-
-    return xs, ys
+    for start, end in bands:
+        fig.add_vrect(
+            x0=start,
+            x1=end,
+            fillcolor=INJECTED_BAND_FILL,
+            line_width=0,
+            layer="below",
+        )
 
 
-def build_water_level_figure(sensor_id: str, x_range=None) -> go.Figure:
+def build_water_level_figure(sensor_id: str, x_range=None, bands=()) -> go.Figure:
     """Structure only — no data yet. Call update_water_level_figure right
     after to populate it, and on every tick thereafter.
 
@@ -327,7 +230,8 @@ def build_water_level_figure(sensor_id: str, x_range=None) -> go.Figure:
             showlegend=False,
         )
     )
-    fig.add_trace(_injected_line_trace())
+
+    _add_injection_bands(fig, bands)
 
     # Solid, unlabelled threshold lines (the reference draws them this way);
     # each one's name and value are carried by the HTML legend main.py
@@ -358,20 +262,16 @@ def update_water_level_figure(fig: go.Figure, series: pd.DataFrame) -> None:
     """
     fig.data[0].x = series["timestamp"].tolist()
     fig.data[0].y = series["value"].tolist()
-    # No `context`: a rebuild redraws the whole visible history, so the first
-    # row here really is the start of the series.
-    overlay_x, overlay_y = injected_overlay(series)
-    fig.data[1].x = overlay_x
-    fig.data[1].y = overlay_y
 
 
-def build_rainfall_figure(sensor_id: str, x_range=None) -> go.Figure:
+def build_rainfall_figure(sensor_id: str, x_range=None, bands=()) -> go.Figure:
     """See build_water_level_figure for the `x_range` / template rationale."""
     fig = go.Figure()
     fig.add_trace(
         go.Bar(x=[], y=[], name="rainfall_intensity", marker_color=RAINFALL_COLOR, showlegend=False)
     )
-    fig.add_trace(_injected_bar_trace())
+
+    _add_injection_bands(fig, bands)
 
     fig.update_layout(**_base_layout(f"{sensor_id} — Rainfall in mm/h"))
     _apply_axis_style(fig)
@@ -393,6 +293,3 @@ def update_rainfall_figure(fig: go.Figure, series: pd.DataFrame) -> None:
     pandas/numpy arrays, so the client-side trace stays extendTraces-safe."""
     fig.data[0].x = series["timestamp"].tolist()
     fig.data[0].y = series["value"].tolist()
-    points = injected_points(series)
-    fig.data[1].x = points["timestamp"].tolist()
-    fig.data[1].y = points["value"].tolist()
