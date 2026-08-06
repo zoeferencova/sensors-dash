@@ -17,6 +17,19 @@
     --surface:      #ffffff;   /* panels and cards */
     --surface-sunk: #fafbfc;   /* stat tiles */
     --canvas:       #f7f8fa;   /* page background behind the cards */
+
+    /* Status marks. --status-normal mirrors constants.SEVERITY_COLORS
+       ["Normal"], the same green the map pins and sensor-status dots get
+       inline, so a green dot means one thing everywhere. --status-flood is
+       NOT from that palette on purpose: the event log grades by event TYPE,
+       not severity, so its flood mark needs a red that reads as "warning"
+       without being mistaken for the Danger (#B4553F) or Extreme (#7D3A32)
+       bands — this is those desaturated well clear of the threshold ramp.
+       Faults reuse --ink-faint: a fault is a data-quality flag, not a
+       stage, so it belongs with the muted greys rather than any status
+       colour. */
+    --status-normal: #7A9B76;
+    --status-flood:  #c25548;
 }
 
 * {
@@ -505,30 +518,31 @@
     font-size: 12px;
 }
 
-/* The core legibility fix: met and unmet are opposite in weight, not just
-   different in glyph. A met condition's dot is FILLED in the accent colour
-   and its label sits at full ink strength — it reads as "lit up". An unmet
-   condition's dot is HOLLOW (ring only) and its label fades to
-   --ink-faint — it recedes instead of competing for attention. Deliberately
-   soft dots rather than a green check / red X: that pairing reads as a
-   form-validation error state and clashes with the muted palette used
-   everywhere else on the dashboard. */
-.rule-dot {
+/* Met and unmet stay opposite in weight, which is what makes the panel
+   readable at a glance — a met condition is "lit up" (green check, label at
+   full ink strength), an unmet one recedes (grey x, label faded to
+   --ink-faint).
+   The x is deliberately GREY, not red: a green-check/red-x pairing reads as
+   form validation, as though an unmet condition were an error to fix, when
+   it just means that condition didn't fire. Keeping the x muted also leaves
+   the checks as the only colour in the column, so what DID fire is what the
+   eye lands on. Fixed width so the labels align whichever mark is drawn. */
+.rule-mark {
     flex: 0 0 auto;
     width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    box-sizing: border-box;
+    text-align: center;
+    line-height: 1;
+    font-weight: 700;
 }
 
-.rule-dot-on {
-    background-color: var(--steel);
-    border: 2px solid var(--steel);
+.rule-mark-on {
+    color: var(--status-normal);
+    font-size: 11px;
 }
 
-.rule-dot-off {
-    background-color: transparent;
-    border: 2px solid #d4dce3;
+.rule-mark-off {
+    color: #c2c8ce;
+    font-size: 10px;
 }
 
 .rule-cond-label {
@@ -563,10 +577,6 @@
     margin-top: 16px;
     padding-top: 14px;
     border-top: 1px solid var(--line-faint);
-}
-
-.rule-verdict-dot {
-    flex: 0 0 auto;
 }
 
 .rule-verdict-text {
@@ -607,47 +617,56 @@
     padding-bottom: 0;
 }
 
-/* One shape per event TYPE (not severity) — see main._log_marker for why
-   this is deliberately its own vocabulary rather than the status dot
-   reused elsewhere. */
-.log-marker {
+/* ---- Status icons (event log + rule-evaluation verdict) --------------- */
+/* One icon per event TYPE, shared by the log and the verdict so the two can
+   never drift apart — see main._status_icon. Deliberately its own
+   vocabulary rather than the severity dot used by the map pins and sensor
+   tabs: those answer "how bad is this sensor right now", these answer "what
+   KIND of thing happened".
+   A uniform 11px-wide box centres whichever mark a variant draws, so the
+   triangle and the two circles all sit on the same optical column down a
+   list. */
+.status-icon {
     flex: 0 0 auto;
-    width: 9px;
-    height: 9px;
-    display: flex;
+    width: 11px;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
+    line-height: 1;
 }
 
-/* A small warning triangle, drawn with the border trick (no glyph, so it
-   scales cleanly at this size). Colour is inline per the stage that fired,
-   set via borderBottomColor — the one place this marker stays severity
-   graded, since "how severe" is still worth keeping within "a flood
-   happened". */
-.log-marker-confirmed {
-    width: 0;
-    height: 0;
-    border-left: 5px solid transparent;
-    border-right: 5px solid transparent;
-    border-bottom: 8px solid;   /* colour set inline */
+/* A real danger triangle — the ⚠ glyph, exclamation and all, rather than
+   the bare CSS-border triangle this was. U+FE0E (appended in the Python) is
+   what forces the monochrome TEXT presentation; without it the platform
+   serves the emoji glyph, which ignores `color` and would drop a stray
+   yellow-and-black icon into a muted panel. Sized a step up because the
+   glyph carries interior detail the plain triangle didn't. */
+.status-icon-flood {
+    color: var(--status-flood);
+    font-size: 12px;
 }
 
-/* Flat grey square — deliberately NOT severity-coloured. A fault is a
-   data-quality flag, not a stage, and a stage colour here would missell it
-   as one. */
-.log-marker-fault {
+/* Hollow grey circle. Same 8px diameter as the normal dot below so the two
+   line up down the list — only the fill differs, which is what carries
+   "unconfirmed" against "resolved". Drawn as a pseudo-element so the outer
+   footprint stays the shared 11px. */
+.status-icon-fault::before,
+.status-icon-normal::before {
+    content: "";
     width: 8px;
     height: 8px;
-    border-radius: 2px;
-    background-color: var(--ink-faint);
+    border-radius: 50%;
 }
 
-/* The calm/resolved case: a muted-green check rather than a shape. */
-.log-marker-normal {
-    font-size: 11px;
-    font-weight: 700;
-    line-height: 1;
-    color: #7A9B76;
+.status-icon-fault::before {
+    box-sizing: border-box;
+    background-color: transparent;
+    border: 1.5px solid var(--ink-faint);
+}
+
+/* The calm/resolved case: a filled dot in the shared Normal green. */
+.status-icon-normal::before {
+    background-color: var(--status-normal);
 }
 
 /* Marks a log line produced while an injected event was overlaying the
@@ -767,13 +786,50 @@
     min-height: 32px;
 }
 
-/* The selected-value text and the trigger area. Only the two injector
-   dropdowns (scenario, target sensor) use dcc.Dropdown anywhere in the app,
-   so this rule is already scoped to them in practice. */
+/* The selected-value text and the trigger area — back to 12px. Shrinking
+   this was a misfire: it made the CLOSED control's own label smaller while
+   leaving the open menu's options untouched, which is the opposite of what
+   was wanted. The options are styled separately below. */
 .dash-dropdown-trigger,
 .dash-dropdown-focus-target,
 .dash-dropdown {
-    font-size: 11px;
+    font-size: 12px;
+}
+
+/* The OPEN menu. This is a separate subtree from the closed control's
+   trigger — `.dash-dropdown-content` wraps `.dash-options-list`, whose
+   children are the option labels — and none of it inherits the trigger's
+   sizing, so it was rendering at the browser default 16px: options notably
+   larger than the 12px field they drop out of. Matching the trigger's 12px
+   is what makes the open menu look like part of the same control. */
+.dash-dropdown-content,
+.dash-dropdown-options,
+.dash-dropdown-option {
+    font-size: 12px;
+}
+
+/* Dash ships its own purple accent (#7f4bc4) on the dropdown, and it is
+   doing three jobs at once: the focus ring, the selected option's text, and
+   the option radios. That purple belongs to no part of this dashboard's
+   palette — retinting it to --steel, the same grey-blue already used for
+   the selected tab, primary buttons and the map's selection ring, folds the
+   control back into the rest of the UI. accent-color inherits, so the
+   wrapper covers the menu too (it isn't portaled out of the wrapper). */
+.dash-dropdown-wrapper,
+.dash-dropdown,
+.dash-dropdown-content {
+    accent-color: var(--steel);
+}
+
+.dash-dropdown:focus,
+.dash-dropdown:focus-visible,
+.dash-dropdown-focus-target:focus,
+.dash-dropdown-focus-target:focus-visible {
+    outline-color: var(--steel);
+}
+
+.dash-dropdown-option.selected {
+    color: var(--steel);
 }
 
 /* The whole wrapper — controls outer spacing */

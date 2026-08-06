@@ -482,6 +482,9 @@ injector_panel = html.Div(
             options=[{"label": s, "value": s} for s in SCENARIOS],
             value=SCENARIOS[0],
             clearable=False,
+            # Four fixed options — a type-ahead box costs a row of chrome at
+            # the top of the menu to filter a list already fully visible.
+            searchable=False,
         ),
         html.Div(id="injector-scenario-description"),
         html.Div(
@@ -493,6 +496,8 @@ injector_panel = html.Div(
                     options=[{"label": sid, "value": sid} for sid in SENSOR_IDS],
                     value=DEFAULT_TARGET_SENSOR,
                     clearable=False,
+                    # Four sensor ids — nothing to search. See above.
+                    searchable=False,
                 ),
             ],
         ),
@@ -1152,18 +1157,19 @@ def _render_current_readings(sensor_assessment, rainfall_latest, soil_latest, so
 
 
 def _condition_row(label: str, met: bool, hint: str | None = None) -> html.Div:
-    """One rule condition, stacked: an indicator dot, then a plain-language
-    name.
+    """One rule condition, stacked: a mark, then a plain-language name.
 
     The whole point of this panel is that met/unmet has to be legible at a
     glance, so the two states are opposite in weight rather than merely
     different in glyph:
-      met     — dot FILLED in the steel accent, label in full-strength ink.
-      not met — dot HOLLOW (ring only, no fill), label in faint muted grey.
+      met     — green check, label in full-strength ink.
+      not met — muted grey x, label in faint grey.
     A met condition reads as "lit up"; an unmet one recedes rather than
-    competing with it. Deliberately soft (no green check / red X) — that
-    form-validation vocabulary reads as an error state and doesn't sit with
-    the muted palette used everywhere else on the dashboard.
+    competing with it. The x stays GREY rather than red on purpose: a
+    green/red pairing reads as form validation, as though a condition that
+    didn't fire were an error to correct, when it is simply a rule that
+    isn't currently satisfied. Grey also leaves the checks as the only
+    colour in the column, so what DID fire is what the eye finds.
 
     Labels are short English rather than the source's snake_case condition
     keys (CLAUDE.md's rule-panel spec names them that way so the panel reads
@@ -1176,7 +1182,7 @@ def _condition_row(label: str, met: bool, hint: str | None = None) -> html.Div:
         className="rule-cond",
         title=hint,
         children=[
-            html.Span(className=f"rule-dot rule-dot-{state}"),
+            html.Span("✓" if met else "✕", className=f"rule-mark rule-mark-{state}"),
             html.Span(label, className=f"rule-cond-label rule-cond-label-{state}" + (" rule-label-hint" if hint else "")),
         ],
     )
@@ -1220,12 +1226,13 @@ def _render_rule_eval(sensor_assessment) -> html.Div:
             html.Div(
                 className="rule-verdict",
                 children=[
-                    # Same dot vocabulary as the tabs, status row, map pins and
-                    # log — a dashed ring here means possible_fault exactly as
-                    # it does everywhere else. This is the one dot in the
-                    # panel that stays severity-coloured, since it's the
-                    # output, not one of the lit/dim inputs above it.
-                    html.Span(className="rule-verdict-dot", style=_status_dot_style(sensor_assessment, size="8px")),
+                    # The SAME icon the event log gives this verdict, from the
+                    # same helper and the same category: a line in the log and
+                    # this panel's conclusion are the same claim about the same
+                    # moment, so they should not be two different marks. This
+                    # replaced a severity-coloured dot, which competed with the
+                    # conditions above it by encoding a second variable.
+                    _status_icon(_sensor_category(sensor_assessment)),
                     html.Span(_verdict_label(sensor_assessment), className="rule-verdict-text"),
                 ],
             ),
@@ -1244,34 +1251,36 @@ def _sensor_category(sensor_assessment) -> str:
 _CATEGORY_LABELS = {"confirmed_flood": "Confirmed flood", "possible_fault": "Possible fault", "normal": "Normal"}
 
 
-def _log_marker(category: str, stage: str) -> html.Span:
-    """The leading type-icon for a log entry.
+def _status_icon(category: str) -> html.Span:
+    """The type-icon for an event, shared by the event log and the
+    rule-evaluation verdict so the two always agree.
 
-    Deliberately its OWN shape vocabulary, not a reuse of _dot_style (the map
-    pins/tabs/rule-verdict's status dot): the log is answering a different
-    question. A status dot says "what is this sensor's severity right now";
-    a log line says "what KIND of thing just happened" — the log previously
-    borrowed the severity dot for that, which conflated the two (a
-    possible_fault and a confirmed Watch looked like the same amber dot).
+    Deliberately its OWN vocabulary, not a reuse of _dot_style (the map
+    pins' and sensor tabs' severity dot): those answer "how bad is this
+    sensor right now", this answers "what KIND of thing happened". The log
+    originally borrowed the severity dot, which conflated the two — a
+    possible_fault and a confirmed Watch came out as the same amber dot.
 
-    Shapes, one per event type, colour still severity-graded where that's
-    meaningful:
-      confirmed_flood — a small warning triangle, coloured by the stage that
-        fired (Watch's amber through Extreme's maroon), so "hot" still reads
-        as more severe within this one type.
-      possible_fault  — a small grey square. Deliberately NOT severity
-        coloured: a fault isn't a stage, it's a data-quality flag, and
-        giving it a stage colour would missell it as one.
-      normal          — a muted-green check, the calm/resolved case.
+    One mark per event type, each a fixed colour:
+      confirmed_flood — a danger triangle (⚠, exclamation and all). Not
+        graded by the stage that fired: shifting ochre->maroon with severity
+        meant this mark was quietly answering the severity question after
+        all, in a column that is supposed to be about type. U+FE0E forces
+        the monochrome text glyph — without it the platform substitutes the
+        emoji, which ignores CSS `color`.
+      possible_fault  — a hollow grey circle. Not severity coloured: a fault
+        is a data-quality flag rather than a stage, and hollow-against-
+        filled is what carries "unconfirmed" versus "resolved".
+      normal          — a filled dot in the shared Normal green.
+
+    Colour and geometry live entirely in the stylesheet; nothing here is
+    inline, so the whole vocabulary is in one place.
     """
     if category == "confirmed_flood":
-        return html.Span(
-            className="log-marker log-marker-confirmed",
-            style={"borderBottomColor": SEVERITY_COLORS.get(stage, NEUTRAL_PIN_COLOR)},
-        )
+        return html.Span("⚠︎", className="status-icon status-icon-flood")
     if category == "possible_fault":
-        return html.Span(className="log-marker log-marker-fault")
-    return html.Span("✓", className="log-marker log-marker-normal")
+        return html.Span(className="status-icon status-icon-fault")
+    return html.Span(className="status-icon status-icon-normal")
 
 
 def _sensor_row_is_injected(readings_df, sensor_id: str, timestamp) -> bool:
@@ -1343,7 +1352,7 @@ def _render_event_log(log_entries: list) -> html.Div:
             html.Div(
                 className="log-entry",
                 children=[
-                    _log_marker(entry["category"], entry["stage"]),
+                    _status_icon(entry["category"]),
                     html.Span(entry["time"], className="log-time"),
                     html.Span(entry["sensor"], className="log-sensor"),
                     # Only present on entries produced while an injected
