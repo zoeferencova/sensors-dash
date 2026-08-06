@@ -137,6 +137,17 @@ def _apply_axis_style(fig: go.Figure) -> None:
     )
     fig.update_xaxes(**axis_style)
     fig.update_yaxes(**axis_style)
+    # Y ONLY, deliberately not folded into axis_style above: the x axis is a
+    # date axis carrying an explicit pinned range (_apply_fixed_x_range), and
+    # "include zero" on a date axis means the 1970 epoch — it would blow the
+    # sliding window wide open.
+    #
+    # Both quantities are physically non-negative, so autorange padding below
+    # zero is drawing an impossible region. It showed most on rainfall, which
+    # is flat 0 for long stretches and empty on first paint: Plotly's default
+    # empty-trace range is [-1, 1], so the chart opened with half its height
+    # given over to negative millimetres of rain before the first bar landed.
+    fig.update_yaxes(rangemode="tozero")
 
 
 def _injected_line_trace() -> go.Scatter:
