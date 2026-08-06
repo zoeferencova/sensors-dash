@@ -235,6 +235,28 @@ def build_sensor_tabs(selected_sensor: str) -> list[html.Button]:
 # 8-step advance per second instead of eight advances that never landed.
 TICK_MS = 1000
 
+# KNOWN LIMIT, deliberately not "fixed": a short injected scenario can play
+# out entirely BETWEEN two renders at the higher speeds, so its pins never
+# visibly escalate even though the rules saw every step of it.
+#
+# Speed is steps-per-tick and the map/readings render only the step each tick
+# LANDS on, so a scenario is reliably visible only while its above-Watch
+# window is at least as wide as the step. Measured widths, against the
+# current data baseline:
+#
+#   Catchment-wide event   8 steps per sensor, staggered r1-r23   all speeds
+#   Saturated antecedent   7 steps                                 marginal at 8x
+#   Sensor fault           4 steps                                 lost at 8x
+#   Convective storm       2 steps                                 lost at 4x and 8x
+#
+# Note this is NOT an 8x-only problem — convective storm is already invisible
+# at 4x — so trimming the speed list would not fix it. The logic itself is
+# speed-independent (update_risk_fanout sweeps every timestep, and the event
+# log records these scenarios correctly at 8x); it is the display that
+# samples. Lengthening the scenarios to survive 8x would mean holding a
+# "sharp convective spike" at peak for 40 simulated minutes, which would
+# falsify the one thing that scenario is meant to demonstrate. Trigger
+# scenarios at 1x-2x; the faster speeds are for traversing the timeline.
 SPEED_OPTIONS = [
     {"label": "1x", "value": 1},
     {"label": "2x", "value": 2},
@@ -1427,6 +1449,14 @@ def update_risk_fanout(
     edge-triggered logging and rate-of-rise now see an identical sequence of
     timesteps at 1x and 8x. Rendering stays at tick rate: the landed step's
     assessment is the one every display reads.
+
+    That split has a visible consequence worth knowing, and it is a sampling
+    property rather than a bug: a scenario whose above-Watch window is
+    narrower than the current steps-per-tick can pass entirely between two
+    landed steps, so the map pins and readings never show it escalate even
+    though the sweep assessed every step and the event log records it
+    correctly. Convective storm (2 steps wide) does exactly this at 4x and
+    8x. See SPEED_OPTIONS for the measured widths per scenario.
 
     This is affordable because the expensive part of a tick was never
     assess_risk (10.8ms at step 100, 16.4ms at step 862) but building the
