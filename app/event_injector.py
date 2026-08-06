@@ -28,11 +28,14 @@ from risk_assessment import CUMULATIVE_LAG_FROM_S01
 CHANNEL_SENSORS = ["S01", "S02", "S03", "S04"]
 UPSTREAM_SENSOR_ID = "S01"
 
+# Dropdown order, and SCENARIOS[0] is the default selection. Ordered
+# catchment-wide first: it is the only scenario that escalates the overall
+# state, so it is the one worth landing on by default.
 SCENARIOS = [
-    "Convective storm",
     "Catchment-wide event",
-    "Sensor fault",
+    "Convective storm",
     "Saturated antecedent",
+    "Sensor fault",
 ]
 
 # "Catchment-wide event" hits every sensor at once (per its own propagation
@@ -44,34 +47,33 @@ SCENARIOS_NEEDING_TARGET = {"Convective storm", "Sensor fault", "Saturated antec
 
 # Shown under the scenario picker. Kept to the mechanism + the gotcha, not a
 # restatement of the scenario name the dropdown already shows.
+#
+# Plain text, no markdown: main.py renders this straight into an html.Div's
+# children, not a dcc.Markdown, so any ** would print as literal asterisks.
+# Keyed by name, so this mapping is independent of SCENARIOS' order.
 SCENARIO_DESCRIPTIONS = {
-    "Convective storm": (
-        "Rainfall + a matching water_level rise at the target sensor only. "
-        "Confirms cleanly at S01 (it self-checks its own rain). At S02-S04, "
-        "confirmation checks S01's rainfall instead — so a storm confined to "
-        "a downstream sensor with nothing seen at S01 reads as a **possible "
-        "fault**, not a Watch. That's not a bug: a real storm that localized "
-        "would look identical to a stuck sensor from S01's vantage point."
-    ),
     "Catchment-wide event": (
-        "Rainfall + water_level at all four sensors at once, each shifted by "
-        "its real propagation lag from S01 (9/12/15 steps). Every sensor "
-        "confirms in turn as the wave arrives, so this is the one scenario "
-        "built to escalate the overall catchment state, not just one pin."
+        "Rain and water-level rise at all four sensors, each shifted by its "
+        "real propagation lag from S01 (9 / 12 / 15 steps). Sensors confirm "
+        "in turn as the wave travels downstream: the one scenario that "
+        "escalates the overall catchment state."
     ),
-    "Sensor fault": (
-        "Water_level jumps at the target sensor with rainfall actively "
-        "suppressed at that sensor and at S01 — guaranteeing 'no rainfall "
-        "anywhere' regardless of what the replay happens to be doing. Always "
-        "reads as a **possible fault**; the catchment state never escalates. "
-        "This is the false-alarm-prevention case."
+    "Convective storm": (
+        "Rain and a matching water-level rise at the target sensor only. S01 "
+        "confirms on its own rain; S02-S04 confirm against S01's rain "
+        "instead, so a storm seen only downstream reads as a possible "
+        "fault, since from S01 it's indistinguishable from a stuck sensor."
     ),
     "Saturated antecedent": (
-        "Same shape as a Convective storm, but the rain-to-water_level "
-        "conversion uses a much higher runoff coefficient (wet ground sheds "
-        "rain instead of absorbing it), so it climbs further on less rain. "
-        "Same S01-only self-confirmation caveat as Convective storm applies "
-        "to downstream targets."
+        "Same shape as a convective storm, but a higher runoff coefficient "
+        "(wet ground sheds rain rather than absorbing it) drives a larger "
+        "rise from less rain. The same S01 self-confirmation caveat applies "
+        "downstream."
+    ),
+    "Sensor fault": (
+        "Water level jumps at the target sensor while rainfall is suppressed "
+        "there and at S01: no rain anywhere to confirm it. Always reads as "
+        "a possible fault; the catchment state never escalates."
     ),
 }
 

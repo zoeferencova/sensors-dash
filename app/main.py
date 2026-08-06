@@ -202,7 +202,7 @@ def build_sensor_tabs(selected_sensor: str) -> list[html.Button]:
         html.Button(
             id={"type": SENSOR_TAB_ID_TYPE, "index": sensor["sensor_id"]},
             className=_tab_class(sensor["sensor_id"], selected_sensor),
-            title=f"{sensor['sensor_id']} — {sensor['name']}",
+            title=f"{sensor['sensor_id']} · {sensor['name']}",
             n_clicks=0,
             children=[
                 html.Span(
@@ -471,7 +471,7 @@ injector_panel = html.Div(
                     title=(
                         "Overlays synthetic readings onto the stream assess_risk sees. "
                         "It never sets the risk state directly, and never touches the "
-                        "underlying dataset — Reset always returns to a clean replay."
+                        "underlying dataset: Reset always returns to a clean replay."
                     ),
                 ),
             ],
@@ -1118,7 +1118,7 @@ def _render_current_readings(sensor_assessment, rainfall_latest, soil_latest, so
             f"{rain_value:.1f}",
             "Rainfall mm/h",
             hint=(
-                f"≥ {RAINFALL_CONFIRM_MM_H:g} mm/h — meaningful upstream rain for confirmation"
+                f"≥ {RAINFALL_CONFIRM_MM_H:g} mm/h: meaningful upstream rain for confirmation"
                 if meaningful
                 else f"Below the {RAINFALL_CONFIRM_MM_H:g} mm/h confirmation threshold"
             ),
@@ -1141,9 +1141,8 @@ def _render_current_readings(sensor_assessment, rainfall_latest, soil_latest, so
             # branch gets its own honest text instead. Which one you see is
             # therefore a live readout of which data shape is loaded.
             hint=(
-                "Wetness of the upstream catchment feeding the monitored reach; "
-                "shared across all sensors — this is why it doesn't change when "
-                "switching sensors."
+                "Catchment-wide soil moisture from upstream of the reach: not a "
+                "per-sensor reading."
                 if soil_is_catchment
                 else "Antecedent wetness reported for this sensor. This dataset still "
                 "carries soil moisture per sensor rather than as one catchment-wide series."

@@ -251,7 +251,7 @@ def build_water_level_figure(sensor_id: str, x_range=None, bands=()) -> go.Figur
     for stage, level in THRESHOLDS.items():
         fig.add_hline(y=level, line=dict(color=SEVERITY_COLORS[stage], width=1.5))
 
-    fig.update_layout(**_base_layout(f"{sensor_id} — Water level in cm"))
+    fig.update_layout(**_base_layout(f"{sensor_id} · Water level in cm"))
     _apply_axis_style(fig)
     _apply_fixed_x_range(fig, x_range)
     return fig
@@ -283,7 +283,7 @@ def build_rainfall_figure(sensor_id: str, x_range=None, bands=()) -> go.Figure:
 
     _add_injection_bands(fig, bands)
 
-    fig.update_layout(**_base_layout(f"{sensor_id} — Rainfall in mm/h"))
+    fig.update_layout(**_base_layout(f"{sensor_id} · Rainfall in mm/h"))
     _apply_axis_style(fig)
     # One decimal place on every tick, so the labels are a consistent width.
     # Y tick labels right-align against the axis, which means a bare "2" ends

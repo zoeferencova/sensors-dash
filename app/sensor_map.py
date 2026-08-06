@@ -111,9 +111,9 @@ def build_markers(
         sa = assessments.get(sensor_id)
         style = _marker_style(sa)
 
-        tooltip_text = f"{sensor_id} — {sensor['name']}"
+        tooltip_text = f"{sensor_id} · {sensor['name']}"
         if sa is not None:
-            tooltip_text += f" — {_status_label(sa)}"
+            tooltip_text += f" · {_status_label(sa)}"
 
         if sensor_id == selected_sensor:
             markers.append(_selection_ring(sensor))
