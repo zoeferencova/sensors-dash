@@ -449,7 +449,7 @@
 /* Open by default (set on the Details component), so no top border is
    needed to fence it off — the label plus whitespace is the separation. */
 .rule-eval {
-    margin-top: 4px;
+    margin-top: 0;
 }
 
 /* list-item, not .field-label's block, so the disclosure triangle survives.
@@ -457,10 +457,26 @@
    Status" and the chart titles above it, rather than the smaller field
    label it used before, so the panel doesn't read as a lesser afterthought
    under the charts. */
+/* margin-top explicitly 0: this summary carries .section-label (18px top
+   margin) but sits inside <details>, so it is NOT a direct child of
+   .left-section and the reset up there never reaches it. Without this the
+   heading started ~22px below the section rule while every other section's
+   content starts at the section's own 16px padding. */
 .rule-eval-summary {
     display: list-item;
     cursor: pointer;
+    margin-top: 0;
     margin-bottom: 10px;
+}
+
+/* The heading text is wrapped in its own span purely to get this gap. The
+   disclosure triangle is the list-item marker, and a marker's distance from
+   the text isn't directly settable — padding on the summary moves the
+   marker along with the content, so it doesn't open the gap. Spacing the
+   text itself does, and leaves the native marker (and its open/closed
+   rotation) untouched. */
+.rule-eval-summary-text {
+    margin-left: 6px;
 }
 
 .rule-eval-body {

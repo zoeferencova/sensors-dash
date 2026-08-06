@@ -430,7 +430,13 @@ left_panel_top = html.Div(
                 # engine; hiding it behind a click undersells it.
                 open=True,
                 children=[
-                    html.Summary("Rule evaluation", className="section-label rule-eval-summary"),
+                    html.Summary(
+                        # Wrapped rather than bare text so the gap to the
+                        # disclosure triangle is settable — see
+                        # .rule-eval-summary-text.
+                        html.Span("Rule evaluation", className="rule-eval-summary-text"),
+                        className="section-label rule-eval-summary",
+                    ),
                     html.Div(id="rule-eval-panel", className="rule-eval-body"),
                 ],
             ),
