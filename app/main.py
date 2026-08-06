@@ -946,20 +946,33 @@ def update_charts(sim_step, selected_sensor, active_events_raw, chart_state):
     new_rainfall = rainfall_series[rainfall_series["timestamp"] > cutoff]
 
     # Trace 0 (main line/bar) always gets the new point(s); trace 1 (the
-    # injected-orange overlay that recolors the injected segment directly on
-    # the line/bars) gets only whichever of those are flagged injected —
-    # possibly none, a harmless empty extend for that trace. Without this,
-    # only the very first point of a multi-tick injected event (sent by the
-    # full-rebuild that fires on trigger) would ever be recolored; later
-    # ticks during the same event would raise the line/bars correctly but
-    # silently drop the "this is simulated" colouring.
-    new_water_level_injected = charts.injected_points(new_water_level)
+    # overlay that recolors the injected stretch directly on the line/bars)
+    # gets only whichever of those are flagged injected — possibly none, a
+    # harmless empty extend for that trace. Without this, only the very first
+    # point of a multi-tick injected event (sent by the full-rebuild that
+    # fires on trigger) would ever be recolored; later ticks during the same
+    # event would raise the line/bars correctly but silently drop the "this
+    # is simulated" colouring.
+    #
+    # The water-level overlay is a LINE, so it also needs the last
+    # already-drawn row as lookback context: that is what lets a run opening
+    # inside this batch emit its leading boundary point and its break from
+    # the previous run, exactly as the full rebuild would (see
+    # charts.injected_overlay). A catchment-wide event makes this load-
+    # bearing rather than theoretical — its downstream sensors start their
+    # pulse 9-15 steps AFTER the trigger, so their run opens during ordinary
+    # incremental ticks, long after the rebuild that fired on trigger.
+    rendered_water_level = water_level_series[water_level_series["timestamp"] <= cutoff]
+    water_level_context = None if rendered_water_level.empty else rendered_water_level.iloc[-1]
+    new_water_level_x, new_water_level_y = charts.injected_overlay(new_water_level, water_level_context)
+    # Bars need no context: each bar stands alone, so there is no line to
+    # break and no boundary to join (see charts.injected_points).
     new_rainfall_injected = charts.injected_points(new_rainfall)
 
     water_level_extend = (
         {
-            "x": [new_water_level["timestamp"].tolist(), new_water_level_injected["timestamp"].tolist()],
-            "y": [new_water_level["value"].tolist(), new_water_level_injected["value"].tolist()],
+            "x": [new_water_level["timestamp"].tolist(), new_water_level_x],
+            "y": [new_water_level["value"].tolist(), new_water_level_y],
         },
         [0, 1],
     )

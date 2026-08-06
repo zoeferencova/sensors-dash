@@ -199,9 +199,72 @@ def _apply_fixed_x_range(fig: go.Figure, x_range) -> None:
 
 
 def injected_points(series: pd.DataFrame) -> pd.DataFrame:
+    """The injected-flagged rows only. Used for the rainfall BARS, where
+    each bar stands alone: a bar carries no line between it and its
+    neighbour, so there is nothing to break and nothing to join. Crucially
+    the bars must NOT pick up the boundary points injected_overlay adds for
+    the line — a bar drawn in the simulated colour is a claim that THAT
+    reading is simulated, so including the real bars either side would
+    mislabel real data."""
     if "injected" not in series.columns or not series["injected"].any():
         return series.iloc[0:0]
     return series[series["injected"]]
+
+
+def injected_overlay(series: pd.DataFrame, context=None) -> tuple[list, list]:
+    """(x, y) for the injected LINE overlay: each contiguous run of injected
+    readings, plus the real reading immediately either side of it, with runs
+    separated by a None break.
+
+    Three things this gets right that filtering to the injected rows did not:
+
+    - **No diagonals across gaps.** Two separate injections (a second event,
+      or the same scenario fired again later) landed in one trace as a single
+      unbroken sequence, so Plotly drew a straight line from the end of the
+      first spike to the start of the second — straight across untouched real
+      data, implying a synthetic reading everywhere in between. `None` is
+      Plotly's line-break sentinel, so each run becomes its own polyline.
+
+    - **Clean joins at both edges.** The pulse envelope is already nonzero at
+      the first flagged reading, so a run drawn from its own first injected
+      row starts part-way up the rise, floating above the real line. Emitting
+      the real reading immediately BEFORE the run (and immediately AFTER it)
+      makes the overlay begin and end on points the blue line already passes
+      through, so the coloured segment grows out of the real series instead
+      of hovering beside it.
+
+    - **Works incrementally.** `context` is the last already-rendered row. It
+      is never emitted as data of its own — only as the leading boundary
+      point of a run that opens on the first row of `series`. That keeps the
+      whole computation lookBACK-only, so a per-tick extendData append
+      produces exactly the points a full rebuild would, without needing to
+      see a timestep the replay hasn't reached yet.
+    """
+    if "injected" not in series.columns:
+        return [], []
+
+    xs: list = []
+    ys: list = []
+    previous_injected = bool(context["injected"]) if context is not None else False
+    previous_x = context["timestamp"] if context is not None else None
+    previous_y = context["value"] if context is not None else None
+
+    for timestamp, value, is_injected in zip(series["timestamp"], series["value"], series["injected"]):
+        if is_injected and not previous_injected and previous_x is not None:
+            # Opening a run: break away from any earlier run, then step back
+            # onto the real line so the colour change starts at the baseline.
+            xs.append(None)
+            ys.append(None)
+            xs.append(previous_x)
+            ys.append(previous_y)
+        # Inside a run, or the first real reading after one ends (the closing
+        # boundary, which lands the overlay back on the real line).
+        if is_injected or previous_injected:
+            xs.append(timestamp)
+            ys.append(value)
+        previous_injected, previous_x, previous_y = bool(is_injected), timestamp, value
+
+    return xs, ys
 
 
 def build_water_level_figure(sensor_id: str, x_range=None) -> go.Figure:
@@ -263,9 +326,11 @@ def update_water_level_figure(fig: go.Figure, series: pd.DataFrame) -> None:
     """
     fig.data[0].x = series["timestamp"].tolist()
     fig.data[0].y = series["value"].tolist()
-    points = injected_points(series)
-    fig.data[1].x = points["timestamp"].tolist()
-    fig.data[1].y = points["value"].tolist()
+    # No `context`: a rebuild redraws the whole visible history, so the first
+    # row here really is the start of the series.
+    overlay_x, overlay_y = injected_overlay(series)
+    fig.data[1].x = overlay_x
+    fig.data[1].y = overlay_y
 
 
 def build_rainfall_figure(sensor_id: str, x_range=None) -> go.Figure:
