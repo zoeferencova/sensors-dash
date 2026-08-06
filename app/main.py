@@ -1460,7 +1460,7 @@ def update_risk_fanout(
     # continuing. The gap is bounded by the largest steps-per-tick (8),
     # since sim_step accumulates from a Store and so can't run ahead when a
     # response is dropped.
-    previous_step = -1 if reset_fired else (last_assessed_step if last_assessed_step is not None else -1)
+    previous_step = last_assessed_step if last_assessed_step is not None else -1
     timestamps = injected["timestamp"]
     for step in range(previous_step + 1, sim_step):
         # Slicing the frame already built for sim_step, NOT rebuilding it:
