@@ -457,15 +457,20 @@
    Status" and the chart titles above it, rather than the smaller field
    label it used before, so the panel doesn't read as a lesser afterthought
    under the charts. */
-/* margin-top explicitly 0: this summary carries .section-label (18px top
-   margin) but sits inside <details>, so it is NOT a direct child of
-   .left-section and the reset up there never reaches it. Without this the
-   heading started ~22px below the section rule while every other section's
-   content starts at the section's own 16px padding. */
+/* Set explicitly, not inherited: this summary carries .section-label (18px
+   top margin) but sits inside <details>, so it is NOT a direct child of
+   .left-section and the margin reset up there never reaches it.
+
+   5px sits this heading between the two references: the section's own 16px
+   padding alone read too tight against the rule above, while the 10px that
+   would line its text up exactly with the chart titles (they clear their
+   section by 17px of slot plus the 10px the figure reserves above its
+   title) read too loose — a chart title has a whole plot beneath it to
+   balance against, this heading does not. */
 .rule-eval-summary {
     display: list-item;
     cursor: pointer;
-    margin-top: 0;
+    margin-top: 5px;
     margin-bottom: 10px;
 }
 
