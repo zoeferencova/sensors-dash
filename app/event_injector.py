@@ -91,6 +91,23 @@ SCENARIO_DESCRIPTIONS = {
 RUNOFF_CM_PER_MM_H = 9.5
 SATURATED_RUNOFF_CM_PER_MM_H = 17.0
 
+# Percentage points added to soil_moisture for the saturated-antecedent
+# scenario. That scenario's premise is wet GROUND, not just heavier runoff:
+# without this it raised the runoff coefficient while leaving the soil
+# moisture reading untouched, so the dashboard showed an amplified rise
+# sitting next to a soil-moisture tile that still read dry — the one number
+# a viewer would check to see WHY the rise was amplified contradicted it.
+#
+# +30 points against this dataset (min 0.3, mean 29, p95 59) lands a typical
+# moment convincingly wet without running past 100% on an already-damp one;
+# apply_injections does no clamping, so the headroom has to come from the
+# size of the step.
+SATURATED_SOIL_MOISTURE_RISE_PCT = 30.0
+
+# The reserved id carrying the single catchment-wide soil_moisture series in
+# the target data shape (CLAUDE.md's data contract).
+CATCHMENT_SENSOR_ID = "CATCHMENT"
+
 # Fixed magnitude per scenario — pre-tuned to reliably cross the stage each
 # scenario is meant to demonstrate (see the coefficients above). No slider:
 # one less control to explain, and the point is showing the rule engine
@@ -273,6 +290,25 @@ def build_event(scenario: str, target_sensor: str | None, magnitude: float, trig
             Delta(target_sensor, "rainfall_intensity", magnitude, rise, hold, decay),
             Delta(target_sensor, "water_level", magnitude * SATURATED_RUNOFF_CM_PER_MM_H, rise, hold, decay),
         ]
+        # The wet ground itself. ANTECEDENT means the catchment was already
+        # saturated when the rain arrived, so this envelope is deliberately
+        # NOT the rainfall's: rise=1 puts soil moisture at full height on the
+        # event's very first step (rather than climbing alongside the rain,
+        # which would read as the ground wetting UP during the storm), the
+        # hold covers the whole rainfall envelope, and a long decay reflects
+        # soil draining far more slowly than a stream crests — the
+        # "slow-decaying antecedent wetness" CLAUDE.md describes.
+        #
+        # Emitted against BOTH the target sensor and CATCHMENT because the
+        # data contract is mid-migration: soil_moisture is per-sensor in the
+        # current file and moves to a single CATCHMENT series in Ano's
+        # revision. apply_injections skips a delta whose (sensor, variable)
+        # matches no rows, so whichever shape is loaded, one of these applies
+        # and the other costs nothing.
+        for soil_sensor in (target_sensor, CATCHMENT_SENSOR_ID):
+            deltas.append(
+                Delta(soil_sensor, "soil_moisture", SATURATED_SOIL_MOISTURE_RISE_PCT, 1, 12, 8)
+            )
 
     else:
         raise ValueError(f"Unknown scenario: {scenario}")
