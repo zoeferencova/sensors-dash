@@ -377,13 +377,25 @@
    legend that used to draw "simulated event" twice. Small and muted — a key
    you consult, not a reading. Sitting between the two charts, ABOVE its own
    bottom border, which doubles as the separator between them. */
+/* Zero left padding, deliberately: both legends sit flush with the panel's
+   own content margin, lining up with the section headings and with each
+   other rather than floating in by a few px. */
 .chart-threshold-legend {
     display: flex;
     flex-direction: column;
     gap: 7px;
     margin: 16px 0 0 0;
-    padding: 0 4px 18px 4px;
+    padding: 0 0 18px 0;
     border-bottom: 1px solid var(--line-faint);
+}
+
+/* The rainfall chart's key: the injected entry on its own, no threshold row
+   and no bottom border (the .left-section boundary below already closes the
+   block off). */
+.chart-legend-standalone {
+    display: flex;
+    justify-content: flex-start;
+    margin-top: 12px;
 }
 
 /* The four stage bands share a row and spread across it; the simulated
@@ -429,6 +441,18 @@
         #7d5ba6 0 4px,
         transparent 4px 6px
     );
+}
+
+/* The rainfall chart's swatch: a filled violet square, because that chart
+   draws the overlay as solid bars rather than a dashed line. Same
+   charts.INJECTED_COLOR, different shape — the colour carries "simulated",
+   the shape carries which mark on which chart. */
+.chart-threshold-legend-square {
+    flex: 0 0 auto;
+    width: 9px;
+    height: 9px;
+    border-radius: 1px;
+    background-color: #7d5ba6;
 }
 
 /* ---- Rule-evaluation accordion ---------------------------------------- */

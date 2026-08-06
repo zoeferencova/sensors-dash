@@ -293,6 +293,29 @@ top_bar = html.Div(
 # what it reads now, its history, why the verdict) instead of one dense
 # column. The sections carry the spacing so the headings themselves keep the
 # type they already had.
+def _simulated_event_legend_item(mark: str) -> html.Div:
+    """The key for the injected overlay, shown under BOTH charts.
+
+    The violet means the same thing in each, but the two charts are read
+    separately — someone looking at the rainfall bars shouldn't have to
+    glance up past a whole other plot to find out what the violet ones are.
+    Built from one helper so the two copies cannot drift apart.
+
+    `mark` picks the swatch shape, because each chart draws the injected
+    overlay differently and a swatch has to look like the thing it stands
+    for (the same rule the threshold lines and the map's "Botič reach" entry
+    already follow): "dash" for the water-level chart's dashed line, "square"
+    for the rainfall chart's solid bars.
+    """
+    return html.Div(
+        className="chart-threshold-legend-item",
+        children=[
+            html.Span(className=f"chart-threshold-legend-{mark}"),
+            html.Span("Simulated event"),
+        ],
+    )
+
+
 left_panel_top = html.Div(
     id="left-panel-top",
     className="left-panel-top",
@@ -378,34 +401,27 @@ left_panel_top = html.Div(
                                 for stage, level in THRESHOLDS.items()
                             ],
                         ),
-                        # ONE entry for both charts, not one under each: the
-                        # injected violet means the same thing on the water
-                        # level line and on the rainfall bars, and it sits
-                        # with the thresholds because this block is the key
-                        # for everything drawn on the pair. Its own row —
-                        # the label is far longer than a "Stage 120", so
-                        # sharing the four-across row above would break their
-                        # even spacing.
+                        # Its own row: the label is far longer than a
+                        # "Stage 120", so sharing the four-across row above
+                        # would break their even spacing.
                         html.Div(
                             className="chart-threshold-legend-row",
-                            children=html.Div(
-                                className="chart-threshold-legend-item",
-                                children=[
-                                    # Dashed swatch, matching the trace's own
-                                    # dash — the legend mark has to carry the
-                                    # line's KIND, not just its colour, since
-                                    # that is half of what distinguishes it
-                                    # from the solid threshold lines.
-                                    html.Span(className="chart-threshold-legend-dash"),
-                                    html.Span("Simulated event"),
-                                ],
-                            ),
+                            children=_simulated_event_legend_item("dash"),
                         ),
                     ],
                 ),
                 html.Div(
                     className="chart-slot chart-slot-short",
                     children=dcc.Graph(id="rainfall-graph", responsive=True, figure=go.Figure()),
+                ),
+                # The rainfall chart's own copy of the key. No thresholds to
+                # list here (the ČHMÚ bands are water-level stages), so this
+                # is the injected entry alone, flush to the panel margin like
+                # the block above it. A square, not a dash: this chart draws
+                # the overlay as solid bars.
+                html.Div(
+                    className="chart-legend-standalone",
+                    children=_simulated_event_legend_item("square"),
                 ),
             ],
         ),
