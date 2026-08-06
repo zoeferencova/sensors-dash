@@ -808,28 +808,23 @@
     font-size: 12px;
 }
 
-/* Dash ships its own purple accent (#7f4bc4) on the dropdown, and it is
-   doing three jobs at once: the focus ring, the selected option's text, and
-   the option radios. That purple belongs to no part of this dashboard's
-   palette — retinting it to --steel, the same grey-blue already used for
-   the selected tab, primary buttons and the map's selection ring, folds the
-   control back into the rest of the UI. accent-color inherits, so the
-   wrapper covers the menu too (it isn't portaled out of the wrapper). */
-.dash-dropdown-wrapper,
-.dash-dropdown,
-.dash-dropdown-content {
-    accent-color: var(--steel);
-}
+/* Dash's own purple accent (#7f4bc4), retinted to this dashboard's
+   grey-blue.
 
-.dash-dropdown:focus,
-.dash-dropdown:focus-visible,
-.dash-dropdown-focus-target:focus,
-.dash-dropdown-focus-target:focus-visible {
-    outline-color: var(--steel);
-}
-
-.dash-dropdown-option.selected {
-    color: var(--steel);
+   Overriding the THEME TOKEN rather than the properties it feeds. Dash
+   defines ~15 `--Dash-*` custom properties on :root, and this is the only
+   non-neutral one among them — every other token is a navy-tinted grey — so
+   it is the single source of every purple the component set shows: the
+   focus ring, the selected option's text, the option radios, and any hover
+   or active state built from the same token. Chasing those individually
+   (accent-color, outline-color, .selected's colour) was tried first and
+   left purple still visible, because a token can surface through paint
+   paths a per-property override doesn't reach.
+   --steel is the grey-blue already carrying "interactive" everywhere else
+   here: the selected sensor tab, the primary buttons, the map's selection
+   ring. */
+:root {
+    --Dash-Fill-Interactive-Strong: var(--steel);
 }
 
 /* The whole wrapper — controls outer spacing */
