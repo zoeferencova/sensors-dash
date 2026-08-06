@@ -100,7 +100,7 @@ def _base_layout(title: str) -> dict:
         # the water-level rise it caused. A shared floor wide enough for both
         # pins them to the same x geometry. automargin still overrides it if
         # a label ever needs more, so this can't clip.
-        margin=dict(l=26, r=0, t=44, b=5),
+        margin=dict(l=28, r=0, t=44, b=5),
         # rainfall's injected bar trace needs to draw directly on top of the
         # real bar at the same x, not offset beside it — Plotly's default
         # "group" barmode would put same-x bars from two traces side by
@@ -375,6 +375,15 @@ def build_rainfall_figure(sensor_id: str, x_range=None) -> go.Figure:
 
     fig.update_layout(**_base_layout(f"{sensor_id} — Rainfall in mm/h"))
     _apply_axis_style(fig)
+    # One decimal place on every tick, so the labels are a consistent width.
+    # Y tick labels right-align against the axis, which means a bare "2" ends
+    # up 14px further right than the water-level chart's "300" directly above
+    # it — the two label columns read as misaligned even though both plot
+    # areas start at exactly the same x. Padding "2" to "2.0" fills that
+    # gutter. It also drops the ragged mixed precision the default produced
+    # ("0", "0.5", "1", "1.5"), and matches the data, which is continuous
+    # mm/h to several decimals rather than whole numbers.
+    fig.update_yaxes(tickformat=".1f")
     _apply_fixed_x_range(fig, x_range)
     return fig
 

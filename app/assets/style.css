@@ -358,16 +358,19 @@
    height:100%, which no class rule can outrank. */
 /* Sized to fill the panel at a typical desktop height without scrolling,
    with enough slack left for the rule-evaluation accordion when it's open.
-   Water level gets the taller slot — it's the reading with four threshold
-   lines to separate. */
+   Both charts get the SAME height: they're a stacked pair read against each
+   other, so equal boxes make the comparison honest — an unequal pair reads
+   as a ranking, and the taller one's vertical scale is exaggerated relative
+   to its neighbour's for no reason. */
 /* Spacing above the pair comes from the .left-section wrapper, so the slots
-   only own their heights and the small gap between the two figures. */
+   only own their height and the small gap between the two figures. */
 .chart-slot {
-    height: 280px;
+    height: 225px;
 }
 
-.chart-slot-short {
-    height: 225px;
+/* The lower chart of the pair — same height, so this only carries the gap
+   between the two. */
+.chart-slot-lower {
     margin-top: 14px;
 }
 

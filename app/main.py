@@ -411,7 +411,7 @@ left_panel_top = html.Div(
                     ],
                 ),
                 html.Div(
-                    className="chart-slot chart-slot-short",
+                    className="chart-slot chart-slot-lower",
                     children=dcc.Graph(id="rainfall-graph", responsive=True, figure=go.Figure()),
                 ),
                 # The rainfall chart's own copy of the key. No thresholds to
