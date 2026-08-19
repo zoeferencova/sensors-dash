@@ -25,6 +25,7 @@ The two flicker-sensitive pieces from Step 3 still hold:
   touched on a tick.
 """
 
+import os
 from datetime import timedelta
 
 import plotly.graph_objects as go
@@ -1553,4 +1554,12 @@ def update_risk_fanout(
 if __name__ == "__main__":
     # 8050 (Dash's default) collides with an unrelated project's leftover
     # server on this machine — a dedicated port avoids that fight entirely.
-    app.run(debug=True, port=8060)
+    #
+    # Both settings are environment-overridable so run.py can hand over a
+    # free port and turn the dev-tools overlay off for a clean launch. The
+    # defaults are unchanged, so running this file directly still behaves
+    # exactly as it always has while developing.
+    app.run(
+        debug=os.environ.get("DASH_DEBUG", "1").lower() not in ("0", "false", "no"),
+        port=int(os.environ.get("PORT", "8060")),
+    )
