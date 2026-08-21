@@ -27,7 +27,7 @@ def clean_readings(df: pd.DataFrame) -> pd.DataFrame:
     """Guarantee no NA/invalid values reach the alert logic or get_series.
 
     This is a data-integrity pass, not the alert logic's own fault detection
-    (CLAUDE.md: that's about physically-implausible-but-present readings,
+    (PROJECT_BRIEF.md: that's about physically-implausible-but-present readings,
     not missing ones) — it just makes the "clean input" assumption those
     downstream layers rely on actually true:
     - non-numeric `value`s are coerced to NaN, then dropped along with any

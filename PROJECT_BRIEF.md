@@ -20,12 +20,14 @@ Ported from a working Streamlit version. Framework-agnostic modules (`constants`
 
 ## Project structure
 ```
-sensors-dash/          # Dash project (the original Streamlit version is kept separately as sensors-dashboard)
-├── data/          # Ano's sensor_data.json, my sensors.json
-├── app/           # all Python code (main app folder)
-├── requirements.txt
-├── .venv/
-└── CLAUDE.md      # this file
+sensors-dash/
+├── run.py             # one-command launcher (creates .venv, installs deps, starts the app)
+├── README.md          # how to run it
+├── requirements.txt   # direct dependencies
+├── app/               # all Python code
+├── data/              # synthetic sensor data + sensor metadata
+├── docs/              # figures used in the writeup
+└── PROJECT_BRIEF.md   # this file
 ```
 
 ## The data contract (input format)
@@ -83,7 +85,7 @@ For each sensor, compute the rise in `water_level` over the last 3 timesteps (15
 ### Layer 3 — multi-sensor confirmation / false-alarm prevention (the key rule)
 A downstream sensor reading high water is only a **confirmed flood** if there was meaningful upstream rainfall within a lookback window that covers the propagation lag.
 
-- Cumulative lags from CLAUDE.md: S02 is ~9 timesteps below S01; S03 ~12 below S01; S04 ~15 below S01.
+- Cumulative lags (see Sensor network above): S02 is ~9 timesteps below S01; S03 ~12 below S01; S04 ~15 below S01.
 - **Confirmation is against S01, the upstream boundary gauge**, at each downstream sensor's cumulative lag — NOT against each sensor's immediate neighbor. Rationale: rainfall is one shared catchment series observed with lag at each point, so S01 carries the earliest, cleanest instance of the upstream signal, and this matches the cumulative-lag constants directly without introducing an unstated neighbor-to-neighbor lag table. S01 is also closest to where runoff is generated, making it the best proxy for "did the catchment get rain that's now heading downstream."
 - **Use a windowed lookback, not a single exact lag.** For a downstream sensor, look for S01 rainfall in a window spanning `[lag − MARGIN, lag + MARGIN]` timesteps earlier. Rationale to cite: flood-wave travel time varies with flow conditions (faster in high flow — exactly when floods happen), so a window centered on the lag avoids missing real events when water moves faster/slower than the point estimate. `LAG_MARGIN = 3` timesteps (±15 min), tunable. The window is **clipped at "now"** — never looks past the current replay moment (can't confirm against rain that hasn't happened yet).
 - "Meaningful upstream rainfall" = S01 `rainfall_intensity` exceeded `RAINFALL_CONFIRM_MM_H` (tunable, ~2 mm/h) at any point in the window.

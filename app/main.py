@@ -1,7 +1,7 @@
 """Dash entry point — Steps 3-4 of the Streamlit->Dash port.
 
-Step 3 (CLAUDE.md "Dashboard sections (target layout)") built the map, the
-sensor charts, and the structural layout. Step 4 (CLAUDE.md "The alert /
+Step 3 (PROJECT_BRIEF.md "Dashboard sections (target layout)") built the map, the
+sensor charts, and the structural layout. Step 4 (PROJECT_BRIEF.md "The alert /
 nowcasting logic") wires the already-ported `risk_assessment.assess_risk`
 into that layout: one callback (`update_risk_fanout`) runs it once per tick
 and fans the single result out to the map pins, the top-bar overall state,
@@ -130,7 +130,7 @@ def injected_readings(sim_step: int, active_events: list):
     forever: assess_risk reads the CURRENT step, whose rows are past the
     pulse and therefore untouched, so the catchment escalates and then
     recovers on its own while the spike stays drawn behind it. The injector
-    still only feeds inputs to the rules, exactly as CLAUDE.md requires —
+    still only feeds inputs to the rules, exactly as PROJECT_BRIEF.md requires —
     retention changes how long an input is remembered, never who decides.
     """
     key = (sim_step, events_signature(active_events))
@@ -657,7 +657,7 @@ app.layout = html.Div(
         # displayed directly. Empty dict means "no history yet" (page load).
         dcc.Store(id="sensor-status-store", data={}),
         # disabled=True: replay opens paused at the first timestep, per
-        # CLAUDE.md — history builds up as it plays, not fully populated.
+        # PROJECT_BRIEF.md — history builds up as it plays, not fully populated.
         # Fixed period — see TICK_MS. `interval` is never a callback Output,
         # so the timer is created once and only ever started/stopped by
         # `disabled`; it can't be reset mid-flight by a speed change.
@@ -904,7 +904,7 @@ def update_injector_scenario_controls(scenario, current_target):
     """Scenario picker drives the description text, whether the
     target-sensor control is shown at all, and which targets it offers.
 
-    "Catchment-wide event" hits every sensor per CLAUDE.md, so it has no
+    "Catchment-wide event" hits every sensor per PROJECT_BRIEF.md, so it has no
     single target (SCENARIOS_NEEDING_TARGET is the same set build_event's
     scenarios use, not re-derived here). Magnitude is a fixed per-scenario
     preset (DEFAULT_MAGNITUDE, used directly by the Trigger callback) rather
@@ -952,7 +952,7 @@ def _stored_events_signature(active_events: list) -> list:
     State("chart-state-store", "data"),
 )
 def update_charts(sim_step, selected_sensor, active_events_raw, chart_state):
-    """The extendData pattern (CLAUDE.md tech stack notes): on a sensor
+    """The extendData pattern (PROJECT_BRIEF.md tech stack notes): on a sensor
     change, the active-events set actually changing, OR the replay looping
     back to the start, rebuild both figures from scratch with the full
     history visible so far (all three are infrequent — a full figure resend
@@ -1073,7 +1073,7 @@ def _verdict_label(sensor_assessment) -> str:
 
 
 def _latest_soil_moisture(df, sensor_id):
-    """Defensive per CLAUDE.md's data contract note: soil_moisture may still
+    """Defensive per PROJECT_BRIEF.md's data contract note: soil_moisture may still
     be per-sensor (old data) or consolidated onto a single CATCHMENT id
     (new). Try the sensor itself first, then fall back to CATCHMENT.
     Returns ((timestamp, value) | None, used_catchment: bool)."""
@@ -1209,7 +1209,7 @@ def _condition_row(label: str, met: bool, hint: str | None = None) -> html.Div:
     colour in the column, so what DID fire is what the eye finds.
 
     Labels are short English rather than the source's snake_case condition
-    keys (CLAUDE.md's rule-panel spec names them that way so the panel reads
+    keys (PROJECT_BRIEF.md's rule-panel spec names them that way so the panel reads
     against the rules) — that only helps a reader who already knows the
     rules. The exact rule lives in `hint`'s tooltip instead, so precision
     isn't lost, just moved out of the way of someone who doesn't want it.
@@ -1325,7 +1325,7 @@ def _sensor_row_is_injected(readings_df, sensor_id: str, timestamp) -> bool:
     `injected` flag apply_injections stamps — water_level or
     rainfall_intensity, whichever the active event actually touched. Used
     only to tag a log line as synthetic; it never feeds assess_risk, which
-    reads the same overlaid readings as if they were real (CLAUDE.md's
+    reads the same overlaid readings as if they were real (PROJECT_BRIEF.md's
     injector separation)."""
     if "injected" not in readings_df.columns:
         return False
@@ -1338,7 +1338,7 @@ def _sensor_row_is_injected(readings_df, sensor_id: str, timestamp) -> bool:
 
 
 def _update_event_log(assessment, readings_df, previous_categories: dict, log_entries: list) -> tuple[dict, list]:
-    """Edge-triggered per CLAUDE.md: append a log line only when a sensor's
+    """Edge-triggered per PROJECT_BRIEF.md: append a log line only when a sensor's
     category (confirmed_flood/possible_fault/normal) actually changes from
     the previous tick, never on every tick. An empty `previous_categories`
     means no history yet (page load) — seed it silently rather than logging

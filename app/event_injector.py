@@ -1,5 +1,5 @@
 """Event injector: overlays synthetic extreme events onto the reading
-stream at read time, for the four demo scenarios in CLAUDE.md.
+stream at read time, for the four demo scenarios in PROJECT_BRIEF.md.
 
 Strict separation, per the brief: this module only ever produces a NEW,
 modified copy of the readings — it never mutates the cached/stored dataset,
@@ -53,7 +53,7 @@ SCENARIOS_NEEDING_TARGET = {"Convective storm", "Sensor fault", "Saturated antec
 # (own_rain OR rising_fast). The suppression zeroes its rainfall, but a
 # fault's whole premise is a sudden water-level jump, which makes
 # rising_fast unavoidably true — so a fault injected at S01 always reads as
-# a confirmed flood, never a fault. That is CORRECT per CLAUDE.md (a gauge
+# a confirmed flood, never a fault. That is CORRECT per PROJECT_BRIEF.md (a gauge
 # with nothing upstream of it has nothing to contradict a spurious jump);
 # it just means the scenario can't do its job there, so it isn't offered.
 SCENARIO_EXCLUDED_TARGETS = {"Sensor fault": {UPSTREAM_SENSOR_ID}}
@@ -106,7 +106,7 @@ SCENARIO_DESCRIPTIONS = {
 #
 # Tuned against the CURRENT synthetic data, whose water_level baseline is
 # still near-zero (Ano's rescale to realistic 40-50cm-dry Botič values
-# hasn't landed yet — see CLAUDE.md). These coefficients push the default
+# hasn't landed yet — see PROJECT_BRIEF.md). These coefficients push the default
 # magnitudes across Watch/Alert regardless of that baseline; once the
 # corrected data lands this may need retuning down.
 RUNOFF_CM_PER_MM_H = 9.5
@@ -126,7 +126,7 @@ SATURATED_RUNOFF_CM_PER_MM_H = 17.0
 SATURATED_SOIL_MOISTURE_RISE_PCT = 30.0
 
 # The reserved id carrying the single catchment-wide soil_moisture series in
-# the target data shape (CLAUDE.md's data contract).
+# the target data shape (PROJECT_BRIEF.md's data contract).
 CATCHMENT_SENSOR_ID = "CATCHMENT"
 
 # Fixed magnitude per scenario — pre-tuned to reliably cross the stage each
@@ -357,7 +357,7 @@ def build_event(scenario: str, target_sensor: str | None, magnitude: float, trig
         # which would read as the ground wetting UP during the storm), the
         # hold covers the whole rainfall envelope, and a long decay reflects
         # soil draining far more slowly than a stream crests — the
-        # "slow-decaying antecedent wetness" CLAUDE.md describes.
+        # "slow-decaying antecedent wetness" PROJECT_BRIEF.md describes.
         #
         # Emitted against BOTH the target sensor and CATCHMENT because the
         # data contract is mid-migration: soil_moisture is per-sensor in the

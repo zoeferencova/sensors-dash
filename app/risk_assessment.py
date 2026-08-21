@@ -1,6 +1,6 @@
 """Alert / nowcasting logic for the Botič flood dashboard.
 
-Implements the five-layer risk assessment from CLAUDE.md ("The alert /
+Implements the five-layer risk assessment from PROJECT_BRIEF.md ("The alert /
 nowcasting logic"). `assess_risk` is the single function that computes the
 full assessment from the system state at the current moment — the
 dashboard, map colors, and rule-evaluation panel all read from its output;
@@ -8,7 +8,7 @@ none of them re-derive risk themselves. The event injector (built later)
 feeds *inputs* into `readings_up_to_now`; it never sets the risk state
 directly. That separation is what keeps the demo honest.
 
-Data assumption (per CLAUDE.md): this module consumes clean, reshaped
+Data assumption (per PROJECT_BRIEF.md): this module consumes clean, reshaped
 per-sensor series (via data_loader.get_series). It assumes no NA/invalid
 values — a separate load/clean layer guarantees that upstream, so this
 logic doesn't re-check validity. "Fault" here means a physically
@@ -25,7 +25,7 @@ import pandas as pd
 from constants import STAGES, stage_for_water_level
 from data_loader import get_series
 
-# --- Tunable constants (named exactly as in CLAUDE.md) --------------------
+# --- Tunable constants (named exactly as in PROJECT_BRIEF.md) --------------------
 
 RATE_OF_RISE_CM_PER_MIN = 0.5
 """Layer 2. The 2013 flood rose ~1 cm/min; this is set at roughly half that
@@ -44,7 +44,7 @@ RAINFALL_CONFIRM_MM_H = 2.0
 """Layer 3. "Meaningful" upstream rainfall for confirming that a downstream
 high reading is a real flood signal rather than an unexplained fault."""
 
-# Cumulative propagation lag from S01, in 5-min timesteps (CLAUDE.md network design).
+# Cumulative propagation lag from S01, in 5-min timesteps (PROJECT_BRIEF.md network design).
 CUMULATIVE_LAG_FROM_S01 = {
     "S02": 9,
     "S03": 12,

@@ -1,4 +1,4 @@
-"""The replay engine (CLAUDE.md "The replay engine"): static synthetic data
+"""The replay engine (PROJECT_BRIEF.md "The replay engine"): static synthetic data
 stepped through on a timer to read as "live". Owns the timeline — the
 ordered sequence of timesteps the whole app plays through — and the single
 function that turns "current step index" into the readings frame everything
@@ -19,7 +19,7 @@ def build_timeline(df: pd.DataFrame) -> list[pd.Timestamp]:
 def visible_readings(df: pd.DataFrame, timeline: list[pd.Timestamp], sim_step: int) -> pd.DataFrame:
     """Readings visible at `sim_step`: every row up to and including
     timeline[sim_step]. History builds up as the replay advances rather
-    than the dashboard opening fully populated (CLAUDE.md default state)."""
+    than the dashboard opening fully populated (PROJECT_BRIEF.md default state)."""
     sim_step = max(0, min(sim_step, len(timeline) - 1))
     current_time = timeline[sim_step]
     return df[df["timestamp"] <= current_time]

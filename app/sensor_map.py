@@ -1,4 +1,4 @@
-"""Sensor map construction (CLAUDE.md tech stack: dash-leaflet).
+"""Sensor map construction (PROJECT_BRIEF.md tech stack: dash-leaflet).
 
 `dl.Map` and `dl.TileLayer` are built ONCE here and never appear as a
 callback Output — tiles, pan, and zoom must never reset. Only the

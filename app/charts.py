@@ -47,7 +47,7 @@ INJECTED_BAND_FILL = "rgba(143, 136, 168, 0.18)"
 
 # --- Visual language ------------------------------------------------------
 # Modelled on Google Flood Hub's discharge panel (the layout reference in
-# CLAUDE.md): quiet chrome, data forward. No axis lines or box, no tick
+# PROJECT_BRIEF.md): quiet chrome, data forward. No axis lines or box, no tick
 # marks, horizontal+vertical gridlines in a very light grey, units carried
 # by a small top-left title instead of rotated axis titles, and the
 # threshold values moved off the plot entirely into an HTML legend
