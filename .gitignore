@@ -4,3 +4,7 @@ __pycache__/
 
 # Editor / assistant tooling - machine-specific, not part of the project
 .claude/
+
+# R session artifacts
+.RData
+.Rhistory
