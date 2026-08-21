@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 520" width="900" height="520" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif">
+  <rect width="900" height="520" fill="#ffffff"/>
+  <style>
+    .h  { font-size: 13px; font-weight: 700; fill: #1a1a1a; }
+    .b  { font-size: 11.5px; fill: #333333; }
+    .c  { font-size: 11px; font-family: Consolas, monospace; fill: #2d7d7d; }
+    .n  { font-size: 11px; fill: #6b6b6b; }
+  </style>
+
+  <text x="0" y="22" class="h" style="font-size:15px">How one tick reaches the screen</text>
+  <text x="0" y="42" class="b">Callbacks never call each other. Each one writes a store, and whichever callbacks are listening to that store run next.</text>
+
+  <rect x="300" y="62" width="300" height="42" fill="#f7f7f7" stroke="#c8c8c8"/>
+  <text x="450" y="88" class="h" text-anchor="middle">the timer fires</text>
+  <text x="612" y="88" class="c">dcc.Interval</text>
+
+  <path d="M 450 104 L 450 120" stroke="#8a8a8a" stroke-width="1.5"/>
+  <polygon points="450,126 446,117 454,117" fill="#8a8a8a"/>
+
+  <rect x="225" y="126" width="450" height="62" fill="#ffffff" stroke="#c8c8c8"/>
+  <text x="450" y="150" class="c" text-anchor="middle">advance_replay</text>
+  <text x="450" y="172" class="b" text-anchor="middle">moves the clock forward, then writes a store</text>
+
+  <path d="M 450 188 L 450 208" stroke="#8a8a8a" stroke-width="1.5"/>
+  <polygon points="450,214 446,205 454,205" fill="#8a8a8a"/>
+  <text x="462" y="204" class="n">writes</text>
+
+  <rect x="275" y="214" width="350" height="60" fill="#f0f0f0" stroke="#1a1a1a" stroke-width="2"/>
+  <text x="450" y="238" class="c" text-anchor="middle">sim-step-store</text>
+  <text x="450" y="260" class="n" text-anchor="middle">a dcc.Store, held in the browser</text>
+
+  <path d="M 450 274 L 450 292 L 240 292 L 240 306" stroke="#8a8a8a" stroke-width="1.5" fill="none"/>
+  <polygon points="240,312 236,303 244,303" fill="#8a8a8a"/>
+  <path d="M 450 274 L 450 292 L 660 292 L 660 306" stroke="#8a8a8a" stroke-width="1.5" fill="none"/>
+  <polygon points="660,312 656,303 664,303" fill="#8a8a8a"/>
+  <text x="450" y="286" class="n" text-anchor="middle">both of these declare it as an input, so both now run</text>
+
+  <rect x="60" y="312" width="360" height="66" fill="#ffffff" stroke="#c8c8c8"/>
+  <text x="240" y="336" class="c" text-anchor="middle">update_charts</text>
+  <text x="240" y="358" class="b" text-anchor="middle">appends the new readings</text>
+
+  <rect x="480" y="312" width="360" height="66" fill="#ffffff" stroke="#c8c8c8"/>
+  <text x="660" y="336" class="c" text-anchor="middle">update_risk_fanout</text>
+  <text x="660" y="358" class="b" text-anchor="middle">assesses the risk, then redraws</text>
+
+  <path d="M 240 378 L 240 396" stroke="#8a8a8a" stroke-width="1.5"/>
+  <polygon points="240,402 236,393 244,393" fill="#8a8a8a"/>
+  <path d="M 660 378 L 660 396" stroke="#8a8a8a" stroke-width="1.5"/>
+  <polygon points="660,402 656,393 664,393" fill="#8a8a8a"/>
+
+  <rect x="60" y="402" width="780" height="44" fill="#f7f7f7" stroke="#c8c8c8"/>
+  <text x="450" y="429" class="h" text-anchor="middle">the interface updates</text>
+
+  <text x="0" y="480" class="b">All seven callbacks work this way. None of them calls another, so the stores are the only wiring between them.</text>
+  <text x="0" y="500" class="b">The table above lists what starts each one and what it writes.</text>
+</svg>
