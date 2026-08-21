@@ -1393,9 +1393,9 @@ def _render_event_log(log_entries: list) -> html.Div:
                     html.Span(entry["time"], className="log-time"),
                     html.Span(entry["sensor"], className="log-sensor"),
                     # Only present on entries produced while an injected
-                    # event was overlaying the reading — a real reading
-                    # never gets this tag. Once Ano's real data lands and
-                    # nothing is injected, this tag simply never appears.
+                    # event was overlaying the reading. Transitions driven by
+                    # the dataset's own storm are untagged, so the tag marks
+                    # exactly the entries a viewer should not read as real.
                     *([html.Span("SIM", className="log-tag-injected")] if entry.get("injected") else []),
                     html.Span(_CATEGORY_LABELS[entry["category"]], className="log-state"),
                 ],

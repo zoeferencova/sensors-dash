@@ -100,15 +100,15 @@ SCENARIO_DESCRIPTIONS = {
 # injector's own simplified rainfall->runoff model — assess_risk has no
 # concept of this conversion (or of soil moisture at all); it only ever sees
 # the resulting water_level/rainfall_intensity readings, exactly like it
-# would from Ano's real simulation. SATURATED is higher: the same rain
+# would from the real simulation. SATURATED is higher: the same rain
 # produces a bigger, faster rise when the ground is already wet and can't
 # absorb it.
 #
-# Tuned against the CURRENT synthetic data, whose water_level baseline is
-# still near-zero (Ano's rescale to realistic 40-50cm-dry Botič values
-# hasn't landed yet — see PROJECT_BRIEF.md). These coefficients push the default
-# magnitudes across Watch/Alert regardless of that baseline; once the
-# corrected data lands this may need retuning down.
+# Tuned against the dataset's ~50 cm dry baseline so each scenario reliably
+# clears the stage it exists to demonstrate. Measured by triggering each one
+# on a quiet stretch of the replay (step 120): convective storm peaks near
+# 194 cm (Alert), saturated antecedent 225 cm (Danger), sensor fault 205 cm
+# (Alert), catchment-wide 337 cm (Extreme). Retune if the baseline changes.
 RUNOFF_CM_PER_MM_H = 9.5
 SATURATED_RUNOFF_CM_PER_MM_H = 17.0
 
@@ -359,12 +359,11 @@ def build_event(scenario: str, target_sensor: str | None, magnitude: float, trig
         # soil draining far more slowly than a stream crests — the
         # "slow-decaying antecedent wetness" PROJECT_BRIEF.md describes.
         #
-        # Emitted against BOTH the target sensor and CATCHMENT because the
-        # data contract is mid-migration: soil_moisture is per-sensor in the
-        # current file and moves to a single CATCHMENT series in Ano's
-        # revision. apply_injections skips a delta whose (sensor, variable)
-        # matches no rows, so whichever shape is loaded, one of these applies
-        # and the other costs nothing.
+        # Emitted against BOTH the target sensor and CATCHMENT. The dataset
+        # now carries soil_moisture only under CATCHMENT, so that is the one
+        # that lands; the per-sensor delta is kept because apply_injections
+        # skips a delta whose (sensor, variable) matches no rows, which makes
+        # this work unchanged against either shape at no cost.
         for soil_sensor in (target_sensor, CATCHMENT_SENSOR_ID):
             deltas.append(
                 Delta(soil_sensor, "soil_moisture", SATURATED_SOIL_MOISTURE_RISE_PCT, 1, 12, 8)
